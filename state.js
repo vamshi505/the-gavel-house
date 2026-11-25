@@ -173,6 +173,7 @@ function speakAsync(text, gender, opts={}){
     const shouldCancel = opts.interrupt !== false;
     const launchUtterance = () => {
       try {
+        if (window.speechSynthesis.paused) window.speechSynthesis.resume();
         const u = new SpeechSynthesisUtterance(spoken);
         window._activeUtterance = u; // Prevent Android/Chrome GC from dropping onend!
         const v = pickEnglishVoice(gender);
@@ -208,7 +209,10 @@ function speakAsync(text, gender, opts={}){
     }
   });
 }
-function speakBidFemale(text){ return speakAsync(text, 'female', { isLiveBid: true, interrupt: true, pitch: 1.16, rate: 1.18 }); }
+function speakBidFemale(text){
+  const fastRate = (typeof aiAuctSpeedLevel !== 'undefined' && aiAuctSpeedLevel === 3) ? 1.32 : (typeof aiAuctSpeedLevel !== 'undefined' && aiAuctSpeedLevel === 2) ? 1.24 : 1.16;
+  return speakAsync(text, 'female', { isLiveBid: true, interrupt: true, pitch: 1.16, rate: fastRate });
+}
 function speakFemale(text){ return speakAsync(text, 'female', { isLiveBid: false, interrupt: true, pitch: 1.16, rate: 1.08 }); }
 function speakMale(text){ return speakAsync(text, 'male', { isLiveBid: false, interrupt: true, pitch: 0.62, rate: 0.94 }); }
 

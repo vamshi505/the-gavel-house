@@ -535,6 +535,12 @@ document.getElementById('btnVoice').onclick = () => {
 };
 
 document.getElementById('btnSettings').onclick = () => {
+  if (typeof getSupabaseCreds === 'function') {
+    const c = getSupabaseCreds();
+    const u = document.getElementById('sbUrlInput'), a = document.getElementById('sbAnonInput');
+    if (u) u.value = c.url || '';
+    if (a) a.value = c.anon || '';
+  }
   populateSelectors();
   updateVoiceInfoLabel();
   updateAiModeStatus();
@@ -1031,6 +1037,7 @@ function addCustomPlayer(){
     id: newId, name, set, role, os, base, ovr, tier, fairVal, master,
     status: 'AVAIL', soldTo: null, soldPrice: 0, injured: false, custom: true
   };
+  Object.assign(newPlayer, computePlayerSplitStats(newPlayer, newId));
   state.players.push(newPlayer);
   if (state.seasonData && state.seasonData.pStats) {
     state.seasonData.pStats[newId] = { runs: 0, wkts: 0, catches: 0, impact: 0 };

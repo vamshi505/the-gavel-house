@@ -176,6 +176,8 @@
               <button class="btn btn-sm btn-gold" style="padding:3px 8px;font-size:10px" id="btnAiAuctPause" onclick="toggleAIAuctioneerPause()">▶ Start Floor</button>
               <button class="btn btn-sm" style="padding:3px 8px;font-size:10px" id="btnAiAuctSpeed" onclick="toggleAIAuctioneerSpeed()">⚡ Speed: 1x</button>
               <button class="btn btn-sm" style="padding:3px 8px;font-size:10px" id="btnAiAuctAccel" onclick="toggleAccelerator()">⏩ Accel: OFF</button>
+              <button class="btn btn-sm btn-muted" style="padding:3px 8px;font-size:10px" onclick="gmSkipCurrentSet()" title="Skip current set & let AI draft for you">⏭️ Skip Set</button>
+              <button class="btn btn-sm btn-purple" style="padding:3px 8px;font-size:10px" onclick="gmAutoBuildRestAuction()" title="Skip entire auction & let AI build your team">⚡ Auto-Build Team</button>
             </div>
           </div>
           <div class="ai-auct-status" id="aiAuctioneerStatus">AI Auctioneer is ready. Tap Start Floor to begin the live auction!</div>

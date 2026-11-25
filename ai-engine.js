@@ -406,7 +406,18 @@ async function runBidRound(isAuto=false, forcedBid=null){
   }
 
   interested.sort((a,b) => b.val - a.val);
-  const winner = interested[0];
+  // REAL AUCTION MULTI-TEAM ROTATION: Let 3-5 interested teams enter the war instead of only #1 vs #2 ping-pong!
+  const recentBidders = new Set((state.bidPoints || []).slice(-2).map(pt => pt.team));
+  const freshEntrants = interested.filter(x => !recentBidders.has(x.team.id));
+  let winner = interested[0];
+  if (freshEntrants.length > 0 && Math.random() < 0.72) {
+    // Pick among top 3 fresh interested tables so 3rd, 4th, 5th teams actively jump in!
+    const pool = freshEntrants.slice(0, Math.min(3, freshEntrants.length));
+    winner = pool[Math.floor(Math.random() * pool.length)];
+  } else if (interested.length >= 2 && Math.random() < 0.45) {
+    const pool = interested.slice(0, Math.min(3, interested.length));
+    winner = pool[Math.floor(Math.random() * pool.length)];
+  }
   state.curBid = reqBid;
   state.curLeader = winner.team.id;
   state.gavelStage = 0;
@@ -635,7 +646,7 @@ function showSoldStamp(name, teamName, price, teamId=''){
   document.getElementById('stampPrice').textContent = price;
   const ov = document.getElementById('soldOverlay');
   ov.classList.add('show');
-  setTimeout(()=>ov.classList.remove('show'), 1450);
+  clearTimeout(ov._tm); ov._tm = setTimeout(()=>ov.classList.remove('show'), 2400);
 }
 
 function pushTicker(msg){
@@ -2771,6 +2782,10 @@ async function startAIAuctioneerLoop(){
           elapsed += stepMs;
         }
         if (token !== aiAuctLoopToken || aiAuctPaused) break;
+        // If YOU just placed a bid, pause briefly so the announcer speaks your bid cleanly before rivals counter!
+        if (state.curLeader === myId) {
+          if (!(await waitAuctioneerMs(voiceOn && !acceleratorMode ? 750 : 280, token))) break;
+        }
       } else {
         // User already passed — zip through AI-vs-AI war fast!
         if (!(await waitAuctioneerMs(aiAuctSpeedLevel===3 ? 60 : fast ? 110 : 220, token))) break;
@@ -2802,7 +2817,7 @@ async function startAIAuctioneerLoop(){
       }
       setAIAuctioneerStatus(`✕ No takers for <b>${p.name}</b> — calling UNSOLD!`);
       hammerUnsold();
-      if (!(await waitAuctioneerMs(fast ? 450 : 950, token))) break;
+      if (!(await waitAuctioneerMs(acceleratorMode ? 700 : 1400, token))) break;
       continue;
     }
 
@@ -2822,7 +2837,8 @@ async function startAIAuctioneerLoop(){
     if (state.gavelStage >= 2) {
       setAIAuctioneerStatus(`🔨 SOLD! <b>${p.name}</b> goes to <b>${state.curLeader}</b> for <b>${fmtCr(state.curBid)}</b>!`);
       hammerSold();
-      if (!(await waitAuctioneerMs(aiAuctSpeedLevel===3 ? 260 : fast ? 420 : 850, token))) break;
+      // Wait 2.6s so the SOLD stamp card stays visible and the Male Gavel Voice finishes announcing SOLD!
+      if (!(await waitAuctioneerMs(acceleratorMode ? 1400 : 2600, token))) break;
       continue;
     }
   }
@@ -2831,3 +2847,18 @@ async function startAIAuctioneerLoop(){
 }
 
 
+
+
+function gmSkipCurrentSet(){
+  if (!state.humanTeamId) { quickSimCurrentSet(); return; }
+  stopAIAuctioneer();
+  quickSimCurrentSet();
+  setAIAuctioneerStatus('⏩ Set skipped! Your AI Coach drafted for your team. Tap <b>▶ Start Floor</b> to resume.');
+}
+
+function gmAutoBuildRestAuction(){
+  if (!confirm('Let your AI Coaching Staff automatically complete the rest of the auction and build your full 25-player squad?')) return;
+  stopAIAuctioneer();
+  quickSimRestAuction();
+  setAIAuctioneerStatus('🏁 Auction auto-completed! Your AI Staff built your full squad — head to <b>SQUADS</b> or <b>SEASON</b>!');
+}
