@@ -6,16 +6,52 @@ let editingXITeamId = null;
 let tempXIIds = [];
 let tempImpactId = null;
 
+// Real-world IPL batting position preferences (lower = higher in the order)
+const REAL_BAT_SLOT = {
+  // #1-#2 Pure Openers
+  'Travis Head': 10, 'Abhishek Sharma': 11, 'Yashasvi Jaiswal': 10, 'Virat Kohli': 11,
+  'Rohit Sharma': 10, 'Shubman Gill': 10, 'Ruturaj Gaikwad': 10, 'Phil Salt': 10,
+  'Jos Buttler': 10, 'Quinton De Kock': 10, 'Devon Conway': 11, 'Ishan Kishan': 11,
+  'KL Rahul': 12, 'Sunil Narine': 10, 'Jake Fraser-McGurk': 10, 'Sai Sudharsan': 12,
+  'Prabhsimran Singh': 11, 'Rachin Ravindra': 12, 'Ryan Rickelton': 11, 'Finn Allen': 10,
+  'Ben Duckett': 11, 'Priyansh Arya': 11, 'Vaibhav Suryavanshi': 11, 'Mitchell Marsh': 12,
+  'Prithvi Shaw': 10, 'Pathum Nissanka': 11, 'Rahmanullah Gurbaz': 11, 'Jonny Bairstow': 11,
+  // #3 Top-Order / No. 3 Specialists
+  'Sanju Samson': 22, 'Suryakumar Yadav': 24, 'Shreyas Iyer': 24, 'Tilak Varma': 25,
+  'Rajat Patidar': 25, 'Nitish Rana': 25, 'Venkatesh Iyer': 24, 'Aiden Markram': 23,
+  'Cameron Green': 24, 'Devdutt Padikkal': 22, 'Angkrish Raghuvanshi': 22, 'Rahul Tripathi': 23,
+  'Steve Smith': 23, 'Will Jacks': 22, 'Karun Nair': 24, 'Abhishek Porel': 22,
+  // #4 Middle-Order Enforcers
+  'Rishabh Pant': 34, 'Nicholas Pooran': 35, 'Riyan Parag': 34, 'Shivam Dube': 36,
+  'Dewald Brevis': 35, 'Daryl Mitchell': 35, 'Nehal Wadhera': 36, 'Naman Dhir': 36,
+  'Nitish Kumar Reddy': 36, 'Ayush Badoni': 37, 'Jacob Bethell': 35, 'Shai Hope': 34,
+  // #5-#6 Finishers & WK-Finishers
+  'Heinrich Klaasen': 44, 'Tristan Stubbs': 45, 'David Miller': 45, 'Glenn Phillips': 45,
+  'Liam Livingstone': 46, 'Marcus Stoinis': 46, 'Hardik Pandya': 47, 'Rinku Singh': 48,
+  'Shimron Hetmyer': 48, 'Tim David': 49, 'Dhruv Jurel': 46, 'Jitesh Sharma': 47,
+  'Shashank Singh': 48, 'Ashutosh Sharma': 50, 'Rovman Powell': 49, 'Sherfane Rutherford': 49,
+  'Shahrukh Khan': 49, 'Abdul Samad': 50, 'Sameer Rizvi': 50, 'Rahul Tewatia': 52,
+  // #6-#7 All-Rounders
+  'Axar Patel': 56, 'Ravindra Jadeja': 58, 'Sam Curran': 56, 'Ramandeep Singh': 55,
+  'Romario Shepherd': 57, 'Krunal Pandya': 59, 'Washington Sundar': 59, 'Azmatullah Omarzai': 58,
+  'Marco Jansen': 62, 'Mitchell Santner': 63, 'Shardul Thakur': 65, 'Pat Cummins': 70,
+  'Rashid Khan': 68, 'Wanindu Hasaranga': 67, 'Harpreet Brar': 66, 'Shahbaz Ahmed': 61
+};
+
 function battingPosScore(p){
   if (!p) return 99;
-  if (p.role === 'BW') return 80 + (100 - p.ovr) * 0.1;
-  if (KNOWN_OPENERS.has(p.name)) return 10 + (100 - p.ovr) * 0.1;
-  if (p.role === 'B' && !KNOWN_FINISHERS.has(p.name)) return 25 + (100 - p.ovr) * 0.1;
-  if (p.role === 'WK' && !KNOWN_FINISHERS.has(p.name)) return 35 + (100 - p.ovr) * 0.1;
-  if (p.role === 'B' && KNOWN_FINISHERS.has(p.name)) return 48 + (100 - p.ovr) * 0.1;
-  if (p.role === 'WK' && KNOWN_FINISHERS.has(p.name)) return 52 + (100 - p.ovr) * 0.1;
-  if (p.role === 'AR') return (isSpinner(p) ? 64 : 58) + (100 - p.ovr) * 0.1;
-  return 50;
+  if (REAL_BAT_SLOT[p.name] !== undefined) return REAL_BAT_SLOT[p.name] + (100 - (p.ovr || 75)) * 0.02;
+  const ph = p.phase || '';
+  if (p.role === 'BW') return 82 + (100 - (p.bat || 30)) * 0.15;
+  if (KNOWN_OPENERS.has(p.name) || ph === 'PP Opener' || ph === 'WK Opener') return 12 + (100 - (p.ovr || 75)) * 0.08;
+  if (ph === 'Top Anchor') return 25 + (100 - (p.ovr || 75)) * 0.08;
+  if (ph === 'Middle Enforcer' || ph === 'WK Middle') return 36 + (100 - (p.ovr || 75)) * 0.08;
+  if (KNOWN_FINISHERS.has(p.name) || ph === 'Death Finisher' || ph === 'WK Finisher') return 48 + (100 - (p.ovr || 75)) * 0.08;
+  if (ph === 'Finisher AR') return 54 + (100 - (p.ovr || 75)) * 0.08;
+  if (p.role === 'AR') return (isSpinner(p) ? 64 : 60) + (100 - (p.ovr || 75)) * 0.08;
+  if (p.role === 'B') return 32 + (100 - (p.ovr || 75)) * 0.08;
+  if (p.role === 'WK') return 42 + (100 - (p.ovr || 75)) * 0.08;
+  return 55;
 }
 
 function autoSortBattingOrder(idList){
@@ -232,6 +268,10 @@ function setTeamLeader(pid, type){
   renderXIEditorList();
 }
 
+function closeXIEditor(){
+  document.getElementById('xiEditorBackdrop')?.classList.remove('open');
+}
+
 function saveManualXI(){
   if (tempXIIds.length !== 11) { showToast(`Select exactly 11 starters (currently ${tempXIIds.length}/11).`); return; }
   const t = state.teams.find(x => x.id === editingXITeamId);
@@ -249,12 +289,11 @@ function saveManualXI(){
   t.customImpact = tempImpactId;
   t.xiSource = 'MANUAL';
   t.xiNote = 'Playing XII customized manually.';
-  closeDrawers();
-  showToast(`Saved ${t.id} Playing XII!`);
+  closeXIEditor();
+  showToast(`✅ Saved ${t.id} Playing XII!`);
   renderAll(); saveState();
   if (pendingPreMatch && (pendingPreMatch.t1Id === t.id || pendingPreMatch.t2Id === t.id)) {
     renderPreMatchLineups();
-    document.getElementById('preMatchBackdrop').classList.add('open');
   }
 }
 
@@ -265,7 +304,8 @@ function formatSquadForGeminiPrompt(t){
   return t.squad.map(id => {
     const p = state.players[id];
     const bowlStyle = isSpinner(p) ? 'Spin' : (p.role === 'BW' || p.role === 'AR') ? 'Pace' : 'Bat';
-    const posHint = KNOWN_OPENERS.has(p.name) ? 'Opener/Top' : KNOWN_FINISHERS.has(p.name) ? 'Middle/Finisher' : p.role === 'BW' ? 'Tail(8-11)' : 'Middle';
+    const slotSc = battingPosScore(p);
+    const posHint = slotSc <= 18 ? 'Opener(#1-2)' : slotSc <= 28 ? 'No.3(#3)' : slotSc <= 40 ? 'Middle(#4)' : slotSc <= 53 ? 'Finisher(#5-6)' : slotSc <= 72 ? 'LowerAR(#6-7)' : 'Bowler(#8-11)';
     const statTxt = st[id] && (st[id].runs > 0 || st[id].wkts > 0) ? ` | Season:${st[id].runs}R,${st[id].wkts}W` : '';
     return `ID:${p.id} | ${p.name} | ${roleLabel(p.role)} (${bowlStyle}, ${posHint}) | ${p.os?'OS':'IND'} | OVR ${p.ovr}${statTxt}`;
   }).join('\n');
@@ -295,7 +335,12 @@ function validateAndApplyGeminiXI(t, res, pitchDesc=''){
 
   const badOrder = cleanXI.some((id, idx) => {
     const p = state.players[id];
-    return (idx <= 5 && p.role === 'BW') || (idx >= 8 && (p.role === 'B' || p.role === 'WK'));
+    const slot = battingPosScore(p);
+    // Catch specialist bowlers in top 6, pure batters in tail, finishers opening, or openers batting #5+
+    return (idx <= 5 && p.role === 'BW')
+        || (idx >= 7 && (p.role === 'B' || p.role === 'WK'))
+        || (idx <= 1 && slot >= 44)
+        || (idx >= 4 && slot <= 15);
   });
   const finalXI = badOrder ? autoSortBattingOrder(cleanXI) : cleanXI;
 
@@ -340,7 +385,7 @@ ${formatSquadForGeminiPrompt(t)}
 Rules:
 1) Max 4 Overseas (OS) in XI.
 2) If 4 OS are in XI, Impact Sub MUST be Indian (!os).
-3) Never put specialist bowlers in #1-#6 or specialist batters in #8-#11.
+3) STRICT REAL-WORLD BATTING ORDER: Put Opener(#1-2) at #1-#2, No.3(#3) at #3, Middle(#4) at #4, Finisher(#5-6) at #5-#6, LowerAR(#6-7) at #6-#7, and Bowler(#8-11) at #8-#11.
 Return ONLY valid JSON: {"xi": [11 ids], "impact": id, "captainId": id, "vcId": id, "note": "short reason"}`;
 
   const res = await callGeminiJSON(prompt, 0.35, 6500);
@@ -1062,6 +1107,36 @@ function getUpcomingFixtureInfo(){
   return { label, t1Id, t2Id, t1, t2, pitch: t1 ? t1.home : 'Balanced IPL Surface' };
 }
 
+
+async function playNextMyTeamMatch(){
+  ensureSeasonInitialized();
+  const s = state.seasonData;
+  if (s.finished) { showToast('Season complete! Tap Start New Season to replay.'); return; }
+  const myId = state.humanTeamId;
+  if (!myId) { await simulateNextMatch(); return; }
+
+  // Auto-simulate any rival matches until myId's next match (full scorecards saved!)
+  let skipped = 0;
+  while (!s.finished) {
+    const fx = getUpcomingFixtureInfo();
+    if (!fx) break;
+    if (fx.t1Id === myId || fx.t2Id === myId) {
+      if (skipped > 0) {
+        renderSeason();
+        saveState();
+        showToast(`⏩ Simulated ${skipped} rival match${skipped===1?'':'es'} — ${myId} is up next!`);
+      }
+      await openPreMatchPreview('NORMAL');
+      return;
+    }
+    await runOneSeasonMatch(false);
+    skipped++;
+  }
+  renderSeason();
+  saveState();
+  showToast(`Season finished! ${myId} did not have any remaining matches.`);
+}
+
 async function simulateNextMatch(){
   await openPreMatchPreview('NORMAL');
 }
@@ -1104,7 +1179,7 @@ ${formatSquadForGeminiPrompt(t2)}
 
 Pick Playing XI (11 unique IDs in batting order #1-#11) + 1 Impact Sub for BOTH teams:
 - Max 4 OS per XI; if 4 OS in XI, Impact Sub MUST be Indian (!os).
-- Keep bowlers in #8-#11 and top/middle batters in #1-#7.
+- STRICT REAL-WORLD BATTING ORDER: Put Opener(#1-2) at #1-#2, No.3(#3) at #3, Middle(#4) at #4, Finisher(#5-6) at #5-#6, LowerAR(#6-7) at #6-#7, and Bowler(#8-11) at #8-#11.
 Return ONLY valid JSON:
 {"pitchReport": "1 sentence on pitch", "team1": {"xi": [11 ids], "impact": id, "captainId": id, "note": "1 line"}, "team2": {"xi": [11 ids], "impact": id, "captainId": id, "note": "1 line"}}`;
     const aiRes = await callGeminiJSON(prompt, 0.35, 6500);
@@ -1306,6 +1381,12 @@ function renderSeason(){
   const champWrap = document.getElementById('champAwardsWrap');
 
   if (!s) {
+    const gmWrap = document.getElementById('gmPlayMyMatchWrap');
+    const gmBtn = document.getElementById('btnPlayMyNextMatch');
+    if (gmWrap && gmBtn) {
+      gmWrap.style.display = state.humanTeamId ? 'block' : 'none';
+      if (state.humanTeamId) gmBtn.textContent = `🏏 Play Next ${state.humanTeamId} Match (Live T20)`;
+    }
     if (prog) prog.textContent = 'READY • 0/74 MATCHES';
     if (banner) banner.innerHTML = '';
     if (loanWrap) loanWrap.innerHTML = '';
@@ -1316,6 +1397,16 @@ function renderSeason(){
   }
 
   if (prog) prog.textContent = s.finished ? '🏆 SEASON COMPLETE (74/74)' : `LIVE • ${s.nextIndex}/74 PLAYED`;
+  const gmWrap = document.getElementById('gmPlayMyMatchWrap');
+  const gmBtn = document.getElementById('btnPlayMyNextMatch');
+  if (gmWrap && gmBtn) {
+    if (state.humanTeamId && !s.finished) {
+      gmWrap.style.display = 'block';
+      gmBtn.textContent = `🏏 Play Next ${state.humanTeamId} Match (Live T20)`;
+    } else {
+      gmWrap.style.display = 'none';
+    }
+  }
   const repW = document.getElementById('replaySeasonWrap');
   if (repW) repW.style.display = s.finished ? 'block' : 'none';
 

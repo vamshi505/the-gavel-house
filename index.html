@@ -656,6 +656,9 @@
           <span class="pill pill-live" id="seasonProgressPill">READY • 0/74 MATCHES</span>
         </div>
         <div id="nextFixturePreview"></div>
+        <div id="gmPlayMyMatchWrap" style="display:none;margin-top:6px">
+          <button class="btn btn-gold" style="width:100%;padding:11px;font-size:13px" id="btnPlayMyNextMatch" onclick="playNextMyTeamMatch()">🏏 Play Next SRH Match (Live T20)</button>
+        </div>
         <div class="btn-row-3" style="margin-top:6px">
           <button class="btn btn-gold" id="btnNextMatch" onclick="simulateNextMatch()">▶ Next Match</button>
           <button class="btn btn-blue" id="btnFinalOver" onclick="openFinalOverSim()">🎬 Final Over</button>
@@ -949,15 +952,15 @@
   </div>
 </div>
 
-<!-- Manual Playing XII Editor Drawer -->
-<div class="backdrop" id="xiEditorBackdrop" onclick="if(event.target===this)closeDrawers()">
+<!-- Manual Playing XII Editor Drawer (z-index: 80 so it opens cleanly ON TOP of Pre-Match!) -->
+<div class="backdrop" id="xiEditorBackdrop" style="z-index:80" onclick="if(event.target===this)closeXIEditor()">
   <div class="drawer" style="max-width:660px">
     <div class="drawer-head">
       <div>
         <div class="sec-title" id="xiEdTitle">✏️ EDIT PLAYING XII</div>
         <div style="font-size:11.5px;color:var(--muted)" id="xiEdSub">Pick 11 Starters (Max 4 Overseas) + 1 Impact Sub</div>
       </div>
-      <button class="icon-btn" onclick="closeDrawers()">✕</button>
+      <button class="icon-btn" onclick="closeXIEditor()">✕</button>
     </div>
     <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
       <span class="pill pill-live" id="xiEdCount">XI: 0/11 • OS: 0/4 • Impact: None</span>
@@ -966,7 +969,7 @@
     <div class="pool-list" id="xiEdList" style="max-height:52vh"></div>
     <div class="btn-row" style="margin-top:4px">
       <button class="btn btn-green" onclick="saveManualXI()">✓ Save Playing XII</button>
-      <button class="btn" onclick="closeDrawers()">Cancel</button>
+      <button class="btn" onclick="closeXIEditor()">Cancel</button>
     </div>
   </div>
 </div>
@@ -1172,7 +1175,7 @@
 
 
 <!-- V44: FULL LIVE BALL-BY-BALL & OVER-BY-OVER MATCH SIMULATION CENTRE -->
-<div class="backdrop" id="liveMatchBackdrop">
+<div class="backdrop" id="liveMatchBackdrop" style="z-index:75">
   <div class="drawer" style="max-width:760px;max-height:92vh">
     <div class="drawer-head">
       <div>
