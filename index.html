@@ -12,7 +12,7 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:ital,wght@0,600;0,700;1,700&family=IBM+Plex+Mono:wght@500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=48" />
+<link rel="stylesheet" href="styles.css?v=50" />
 </head>
 <body class="theme-hud">
 <canvas id="confettiCanvas" style="position:fixed;inset:0;pointer-events:none;z-index:85"></canvas>
@@ -34,7 +34,7 @@
       <div class="brand">
         <div class="crest">IPL</div>
         <div class="brand-text">
-          <h1>The Gavel House <span style="font-size:10px;color:#38bdf8;font-style:normal;vertical-align:middle">v48</span></h1>
+          <h1>The Gavel House <span style="font-size:10px;color:#38bdf8;font-style:normal;vertical-align:middle">v50</span></h1>
           <p id="hdrSub">520 Players • ₹120 Cr • ₹25 Cr Cap</p>
         </div>
       </div>
@@ -669,6 +669,9 @@
           <button class="btn btn-sm" onclick="simulateBatchMatches(15)">⏩ Sim 15</button>
           <button class="btn btn-purple btn-sm" onclick="openScheduleDrawer()">📅 Schedule</button>
         </div>
+        <div style="margin-top:7px">
+          <button class="btn btn-blue btn-sm" style="width:100%;border-color:#38bdf8" onclick="openIntlCareerHub()">🌍 International Career Mode (Top 10 ICC T20I Nations — Win IPL as GM to Unlock!)</button>
+        </div>
         <div id="replaySeasonWrap" style="display:none;margin-top:7px">
           <button class="btn btn-purple btn-sm" style="width:100%" onclick="replayNewSeason()">🔄 Start New Season With Same 10 Squads</button>
         </div>
@@ -1218,6 +1221,51 @@
       </div>
     </div>
 
+    <!-- Live Win Probability Bar -->
+    <div style="margin:2px 0">
+      <div id="lmWinProbTxt" style="display:flex;justify-content:space-between;font-family:'IBM Plex Mono',monospace;font-size:10px;font-weight:700"></div>
+      <div class="win-prob-bar" id="lmWinProbBar" style="height:7px;margin:3px 0 0"></div>
+    </div>
+
+    <!-- Cricket Coach / Manager Live Tactical Desk -->
+    <details class="gm-tools-drop" style="margin-top:0" open>
+      <summary>🧠 CRICKET MANAGER LIVE TACTICS (TEMPO • BOWLING • FIELD • BOWLER)</summary>
+      <div class="gm-tools-body" style="gap:7px">
+        <div>
+          <div style="font-size:9.5px;font-weight:800;color:var(--gold);font-family:'IBM Plex Mono',monospace;margin-bottom:3px">🏏 BATTING TEMPO / AGGRESSION</div>
+          <div class="filter-bar" id="lmTempoRow" style="margin-bottom:0">
+            <button class="chip" data-val="DEFEND" onclick="lmSetTempo('DEFEND')">🛡️ Defend</button>
+            <button class="chip active" data-val="BALANCED" onclick="lmSetTempo('BALANCED')">⚖️ Balanced</button>
+            <button class="chip" data-val="ATTACK" onclick="lmSetTempo('ATTACK')">🔥 Attack</button>
+            <button class="chip" data-val="SLOG" onclick="lmSetTempo('SLOG')">🚀 Slog</button>
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+          <div>
+            <div style="font-size:9.5px;font-weight:800;color:#38bdf8;font-family:'IBM Plex Mono',monospace;margin-bottom:3px">🎯 BOWLING PLAN</div>
+            <div class="filter-bar" id="lmBowlPlanRow" style="margin-bottom:0">
+              <button class="chip active" data-val="STUMP" onclick="lmSetBowlPlan('STUMP')">🛡️ Tight</button>
+              <button class="chip" data-val="YORKER" onclick="lmSetBowlPlan('YORKER')">🎯 Yorker</button>
+              <button class="chip" data-val="BOUNCER" onclick="lmSetBowlPlan('BOUNCER')">⚡ Short</button>
+              <button class="chip" data-val="FLIGHT" onclick="lmSetBowlPlan('FLIGHT')">🌀 Flight</button>
+            </div>
+          </div>
+          <div>
+            <div style="font-size:9.5px;font-weight:800;color:#34d399;font-family:'IBM Plex Mono',monospace;margin-bottom:3px">🛡️ FIELD SETTING</div>
+            <div class="filter-bar" id="lmFieldRow" style="margin-bottom:0">
+              <button class="chip" data-val="ATTACK" onclick="lmSetField('ATTACK')">⚔️ Ring</button>
+              <button class="chip active" data-val="BALANCED" onclick="lmSetField('BALANCED')">⚖️ Bal</button>
+              <button class="chip" data-val="GUARD" onclick="lmSetField('GUARD')">🛡️ Deep</button>
+            </div>
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr auto;gap:6px;align-items:center">
+          <select id="lmBowlerSelect" class="input-box" style="padding:5px 8px;font-size:11px" onchange="lmSelectBowler(this.value)"></select>
+          <button class="btn btn-sm btn-gold" id="btnLmImpactSub" onclick="lmTriggerManualImpact()">⚡ Impact Sub</button>
+        </div>
+      </div>
+    </details>
+
     <!-- Interactive Match Controls -->
     <div class="btn-row-3" id="lmControlsPrimary" style="margin-top:0">
       <button class="btn btn-gold" id="btnLmBall" onclick="lmBowlBall()">🏏 Next Ball</button>
@@ -1259,6 +1307,24 @@
       <button class="btn btn-gold" id="btnBowlNextBall" onclick="bowlFinalOverBall()">🏏 Bowl Next Ball</button>
       <button class="btn btn-blue" id="btnAutoFinalOver" onclick="autoPlayFinalOver()">▶ Auto-Play Over</button>
     </div>
+  </div>
+</div>
+
+
+<!-- V50: INTERNATIONAL CRICKET MANAGER CAREER MODAL (TOP 10 ICC T20I NATIONS) -->
+<div class="backdrop" id="intlCareerBackdrop" style="z-index:74" onclick="if(event.target===this)closeIntlCareerHub()">
+  <div class="drawer" style="max-width:780px;max-height:92vh">
+    <div class="drawer-head">
+      <div>
+        <div class="sec-title">🌍 INTERNATIONAL CRICKET MANAGER CAREER</div>
+        <div style="font-size:11px;color:var(--muted)">Manage Top 10 ICC Men's T20I Nations • Active 2026 Squads • Bilateral Series &amp; T20 World Cup</div>
+      </div>
+      <div style="display:flex;gap:6px;align-items:center">
+        <span class="pill pill-warn" id="intlUnlockPill">🔒 WIN IPL AS GM</span>
+        <button class="icon-btn" onclick="closeIntlCareerHub()">✕</button>
+      </div>
+    </div>
+    <div id="intlCareerBody" style="display:flex;flex-direction:column;gap:8px"></div>
   </div>
 </div>
 
@@ -1325,11 +1391,13 @@
 <div class="toast" id="toast"></div>
 
 
-<script src="players.js?v=48"></script>
-<script src="state.js?v=48"></script>
-<script src="ai-engine.js?v=48"></script>
-<script src="multiplayer.js?v=48"></script>
-<script src="season.js?v=48"></script>
-<script src="ui.js?v=48"></script>
+<script src="players.js?v=50"></script>
+<script src="state.js?v=50"></script>
+<script src="offline-engine.js?v=50"></script>
+<script src="ai-engine.js?v=50"></script>
+<script src="multiplayer.js?v=50"></script>
+<script src="season.js?v=50"></script>
+<script src="international.js?v=50"></script>
+<script src="ui.js?v=50"></script>
 </body>
 </html>

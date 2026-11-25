@@ -1034,18 +1034,7 @@ async function runOneSeasonMatch(useGeminiLine=true, tossInfo=null){
 
   const loserId = bWins ? A.id : B.id;
   const venueS = teamAObj.home.split(' (')[0];
-  const offlineLines = superOverData ? [
-    `🔥 SUPER OVER CLASSIC at ${venueS}! ${winner.id} edge out ${loserId} — POTM: ${potm}. ${injNote}`
-  ] : bWins ? [
-    `${winner.id} chase it down at ${venueS} by ${margin}, powered by POTM ${potm}! ${injNote}`,
-    `Clinical chase! ${winner.id} overhaul ${loserId} by ${margin} — ${potm} stars. ${injNote}`,
-    `${winner.id} hunt down ${scoreA + 1} at ${venueS} (${margin}) behind ${potm}'s match-winning display. ${injNote}`
-  ] : [
-    `${winner.id} defend ${scoreA} at ${venueS} to beat ${loserId} by ${margin} — POTM: ${potm}! ${injNote}`,
-    `Bowling masterclass! ${winner.id} restrict ${loserId} and win by ${margin} (${potm} shines). ${injNote}`,
-    `${winner.id} hold their nerve at ${venueS} to defeat ${loserId} by ${margin} — POTM: ${potm}. ${injNote}`
-  ];
-  let oneLiner = offlineLines[Math.floor(Math.random() * offlineLines.length)];
+  let oneLiner = buildOfflineMatchOneLiner(winner.id, loserId, venueS, scoreA, margin, potm, injNote, Boolean(superOverData), bWins);
   if (useGeminiLine && getSavedApiKey()) {
     const mPrompt = `IPL ${label}: ${A.id} (${scoreA}/${wktsA}) vs ${B.id} (${scoreB}/${wktsB} in ${ovB} ov) at ${teamAObj.home}.
 Winner: ${winner.id} by ${margin}. Top performances: ${winBat?.name} ${winBat?.r}(${winBat?.b}), ${winBowl?.name} ${winBowl?.w}/${winBowl?.r}.
@@ -1125,6 +1114,9 @@ function finalizeSeasonAwards(){
   setTimeout(()=>sfxCrowdRoar(1.8), 150);
   speakMale(`The IPL Champions are ${s.table[s.champId].name}!`);
   pushTicker(`🏆 IPL CHAMPIONS: ${s.champId}! Orange Cap: ${orange.name} • Purple Cap: ${purple.name} • Brown Cap: ${brown.name}`);
+  if (typeof checkInternationalCareerUnlock === 'function' && checkInternationalCareerUnlock()) {
+    showToast('🌍🏆 IPL CHAMPION! International Cricket Career Mode UNLOCKED!');
+  }
 }
 
 let pendingPreMatch = null;
@@ -1249,18 +1241,31 @@ function renderPreMatchLineups(){
   const wrap = document.getElementById('pmLineupsWrap');
   if (!wrap) return;
 
+  const getPlayerFormAvg = (pid) => {
+    const h = state.playerForm && state.playerForm[pid] ? state.playerForm[pid] : [];
+    return h.length >= 2 ? Math.round(h.reduce((a,b)=>a+b,0) / h.length) : 28;
+  };
   const renderCard = (t) => {
     const { xi, impact } = computePlayingXII(t, pitch);
     const osXI = xi.filter(p => p.os).length;
+    const xiSet = new Set(xi.map(p => p.id));
+    const coldStarters = xi.filter(p => getPlayerFormAvg(p.id) <= 14);
+    const hotBench = t.squad.map(id => state.players[id]).filter(p => p && !xiSet.has(p.id) && (osXI < 4 || !p.os)).sort((a,b) => b.ovr - a.ovr)[0];
+    const swapAlert = (coldStarters.length && hotBench) ? `
+      <div style="margin-bottom:6px;padding:5px 7px;background:rgba(244,63,94,0.12);border:1px solid rgba(244,63,94,0.45);border-radius:4px;font-size:10.5px;display:flex;justify-content:space-between;align-items:center;gap:6px">
+        <span>❄️ <b>${coldStarters[0].name}</b> is out of form!</span>
+        <button class="btn btn-sm btn-gold" style="padding:2px 7px;font-size:9.5px" onclick="quickSwapColdPlayer('${t.id}',${coldStarters[0].id},${hotBench.id})">🔄 Swap ${hotBench.name.split(' ')[0]}</button>
+      </div>` : '';
     return `
       <div style="background:var(--input-bg);border:1.5px solid var(--card-border);border-top:4px solid ${t.color};border-radius:6px;padding:10px">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
           <span style="display:inline-flex;align-items:center;gap:5px">${getTeamLogo(t.id, 20)}<b style="color:${t.color}">${t.id} PLAYING 12</b> <small style="color:var(--muted)">(OS ${osXI}/4)</small></span>
           <button class="btn btn-sm" style="padding:3px 7px;font-size:9.5px" onclick="openXIEditor('${t.id}')">✏️ Edit</button>
         </div>
+        ${swapAlert}
         ${t.xiNote ? `<div style="font-size:10.5px;color:var(--muted);font-style:italic;margin-bottom:6px">${t.xiNote}</div>` : ''}
         <div style="display:flex;flex-direction:column;gap:3px;font-size:11px;font-family:'IBM Plex Mono',monospace">
-          ${xi.map((p,i)=>`<div style="display:flex;justify-content:space-between;padding:2px 4px;background:rgba(255,255,255,0.03);border-radius:2px"><span><b>${i+1}.</b> ${p.name}${t.captainId===p.id?' ©':''}${p.os?' ✈️':''}</span><span style="color:var(--muted)">${p.role}${isSpinner(p)?'•Sp':p.role==='BW'?'•Pc':''}</span></div>`).join('')}
+          ${xi.map((p,i)=>`<div style="display:flex;justify-content:space-between;padding:2px 4px;background:rgba(255,255,255,0.03);border-radius:2px"><span><b>${i+1}.</b> ${p.name}${t.captainId===p.id?' ©':''}${getFormBadge(p.id)}${p.os?' ✈️':''}</span><span style="color:var(--muted)">${p.role}${isSpinner(p)?'•Sp':p.role==='BW'?'•Pc':''}</span></div>`).join('')}
           ${impact ? `<div style="margin-top:4px;padding:4px 6px;background:var(--gold-dim);border:1px solid var(--gold);border-radius:3px;color:var(--gold);font-weight:700">⚡ 12th / Impact: ${impact.name} (${impact.os?'OS':'IND'} • ${impact.role})</div>` : ''}
         </div>
       </div>`;
@@ -1268,6 +1273,23 @@ function renderPreMatchLineups(){
   wrap.innerHTML = renderCard(t1) + renderCard(t2);
 }
 
+
+
+function quickSwapColdPlayer(tid, outId, inId){
+  const t = state.teams.find(x => x.id === tid);
+  if (!t) return;
+  const { xi, impact } = computePlayingXII(t, pendingPreMatch?.pitch || t.home);
+  const newIds = xi.map(p => p.id === outId ? inId : p.id);
+  t.customXI = autoSortBattingOrder(newIds);
+  const newImp = sanitizeImpactForXI(t, t.customXI, impact?.id === inId ? outId : impact?.id, pendingPreMatch?.pitch || t.home);
+  t.customImpact = newImp ? newImp.id : null;
+  t.xiSource = 'MANUAL';
+  t.xiNote = `Rotated out-of-form ${state.players[outId]?.name} for fresh ${state.players[inId]?.name}.`;
+  sfxPaddle();
+  showToast(`🔄 Swapped ${state.players[outId]?.name} → ${state.players[inId]?.name}!`);
+  renderPreMatchLineups();
+  saveState();
+}
 
 function rollPreMatchToss(silent=false){
   if (!pendingPreMatch) return;
@@ -2155,22 +2177,39 @@ function initLiveInnings(batTeam, bowlTeam, batXI, bowlXI, venue, target=null){
 
 function startLiveMatchSimulation(fx, tossInfo){
   lmStopAuto();
+  const isIntl = Boolean(fx.isInternational);
   const t1Id = tossInfo.batFirstId;
   const t2Id = (t1Id === fx.t1Id) ? fx.t2Id : fx.t1Id;
-  const team1 = state.teams.find(x => x.id === t1Id);
-  const team2 = state.teams.find(x => x.id === t2Id);
-  const xii1 = computePlayingXII(team1, fx.pitch);
-  const xii2 = computePlayingXII(team2, fx.pitch);
+  let team1, team2, xii1, xii2;
+  if (isIntl) {
+    team1 = (t1Id === fx.t1Id) ? fx.t1 : fx.t2;
+    team2 = (t2Id === fx.t1Id) ? fx.t1 : fx.t2;
+    const x1 = (t1Id === fx.t1Id) ? fx.customXI1 : fx.customXI2;
+    const x2 = (t2Id === fx.t1Id) ? fx.customXI1 : fx.customXI2;
+    xii1 = { xi: [...x1], impact: null };
+    xii2 = { xi: [...x2], impact: null };
+  } else {
+    team1 = state.teams.find(x => x.id === t1Id);
+    team2 = state.teams.find(x => x.id === t2Id);
+    xii1 = computePlayingXII(team1, fx.pitch);
+    xii2 = computePlayingXII(team2, fx.pitch);
+    if (state.humanTeamId && (t1Id === state.humanTeamId || t2Id === state.humanTeamId)) {
+      state.gmMatchesManaged = (state.gmMatchesManaged || 0) + 1;
+    }
+  }
 
   const inn1 = initLiveInnings(team1, team2, [...xii1.xi], [...xii2.xi], fx.pitch, null);
 
   lmState = {
-    fx, tossInfo, team1, team2, xii1, xii2,
+    fx, tossInfo, team1, team2, xii1, xii2, isIntl,
     venue: fx.pitch,
     innNum: 1,
     inn1,
     inn2: null,
     impactNotes: [],
+    impactUsed1: false,
+    impactUsed2: false,
+    tactics: { tempo: 'BALANCED', bowlPlan: 'STUMP', field: 'BALANCED' },
     finished: false,
     committed: false,
     showCard: false
@@ -2225,12 +2264,20 @@ function lmStepSingleBall(silent=false){
   const isSpin = venueL.includes('chepauk') || venueL.includes('ekana') || venueL.includes('jaipur');
   const isDew = st.innNum === 2 && st.tossInfo.dew && st.tossInfo.dew.includes('Heavy');
 
-  // Realistic T20 phase & skill-weighted ball outcome
+  // Realistic T20 phase, skill & Cricket Coach Tactical Controls!
+  const tac = st.tactics || { tempo:'BALANCED', bowlPlan:'STUMP', field:'BALANCED' };
+  const tempoRollMod = tac.tempo === 'SLOG' ? 9 : tac.tempo === 'ATTACK' ? 4.5 : tac.tempo === 'DEFEND' ? -6 : 0;
+  const tempoWktMod  = tac.tempo === 'SLOG' ? 4.2 : tac.tempo === 'ATTACK' ? 1.6 : tac.tempo === 'DEFEND' ? -2.2 : 0;
+  const bowlPlanRoll = tac.bowlPlan === 'YORKER' ? -3.5 : tac.bowlPlan === 'BOUNCER' ? 1.5 : tac.bowlPlan === 'FLIGHT' ? (bowler.isSpin ? 2.5 : 1) : -1.5;
+  const bowlPlanWkt  = tac.bowlPlan === 'YORKER' ? 1.4 : tac.bowlPlan === 'BOUNCER' ? 2.1 : tac.bowlPlan === 'FLIGHT' ? (bowler.isSpin ? 2.4 : 0.5) : 0.6;
+  const fieldRollMod = tac.field === 'ATTACK' ? 2.5 : tac.field === 'GUARD' ? -3.5 : 0;
+  const fieldWktMod  = tac.field === 'ATTACK' ? 1.8 : tac.field === 'GUARD' ? -1.1 : 0;
+
   const skillDiff = ((striker.bat || 75) - (bowler.bowl || 75)) * 0.25;
   const phaseAgg = overNum < 6 ? 4 : overNum >= 15 ? 8 : 0;
   const pitchMod = isFlat ? 5 : (isSpin && bowler.isSpin ? -5 : 0);
   const dewMod = isDew ? 4 : 0;
-  const roll = Math.random() * 100 + skillDiff + phaseAgg * 0.4 + pitchMod + dewMod;
+  const roll = Math.random() * 100 + skillDiff + phaseAgg * 0.4 + pitchMod + dewMod + tempoRollMod + bowlPlanRoll + fieldRollMod;
 
   let code = '1', runs = 1, isWkt = false, isExtra = false, commText = '';
 
@@ -2248,7 +2295,7 @@ function lmStepSingleBall(silent=false){
 
     // Wicket probability (~4.8% base, slightly higher in death overs or vs tailenders)
     const tailPenalty = striker.role === 'BW' ? 4.5 : 0;
-    const wktThresh = Math.max(3.0, 5.2 + tailPenalty + (overNum >= 16 ? 2.2 : 0) - skillDiff * 0.25);
+    const wktThresh = Math.max(1.8, 5.2 + tailPenalty + (overNum >= 16 ? 2.2 : 0) + tempoWktMod + bowlPlanWkt + fieldWktMod - skillDiff * 0.25);
 
     if (roll < wktThresh) {
       isWkt = true; code = 'W'; runs = 0;
@@ -2423,6 +2470,67 @@ function lmToggleScorecard(){
   renderLiveMatchUI();
 }
 
+
+function lmSetTempo(val){
+  if (!lmState) return;
+  lmState.tactics.tempo = val;
+  beep(640, 0.05, 'triangle', 0.08);
+  renderLiveMatchUI();
+}
+function lmSetBowlPlan(val){
+  if (!lmState) return;
+  lmState.tactics.bowlPlan = val;
+  beep(580, 0.05, 'triangle', 0.08);
+  renderLiveMatchUI();
+}
+function lmSetField(val){
+  if (!lmState) return;
+  lmState.tactics.field = val;
+  beep(520, 0.05, 'triangle', 0.08);
+  renderLiveMatchUI();
+}
+function lmSelectBowler(bowlerId){
+  if (!lmState || lmState.finished) return;
+  const inn = lmState.innNum === 1 ? lmState.inn1 : lmState.inn2;
+  if (!inn) return;
+  if (inn.legalBalls % 6 !== 0) { showToast('You can switch bowlers at the start of an over!'); return; }
+  const b = inn.bowlCard.find(x => x.id === parseInt(bowlerId, 10));
+  if (!b || b.ov >= 4 || b.id === inn.lastBowlerId) { showToast('That bowler cannot bowl this over.'); return; }
+  inn.curBowler = b;
+  sfxPaddle();
+  showToast(`🎯 ${b.name} brought into the attack!`);
+  renderLiveMatchUI();
+}
+function lmTriggerManualImpact(){
+  if (!lmState || lmState.finished || lmState.isIntl) return;
+  const st = lmState;
+  const inn = st.innNum === 1 ? st.inn1 : st.inn2;
+  const isTeam1Bat = (st.innNum === 1);
+  const batImp = isTeam1Bat ? st.xii1.impact : st.xii2.impact;
+  if (!batImp) { showToast('No Impact Sub available for this team.'); return; }
+  if ((isTeam1Bat && st.impactUsed1) || (!isTeam1Bat && st.impactUsed2)) {
+    showToast('Impact Sub already used by this team!'); return;
+  }
+  const alreadyIn = inn.batCard.some(b => b.id === batImp.id);
+  if (alreadyIn) { showToast('Impact Sub already in the XI!'); return; }
+  const replaceIdx = inn.batCard.findIndex(b => !b.batted && b.role === 'BW');
+  const idxToUse = replaceIdx !== -1 ? replaceIdx : inn.batCard.length - 1;
+  const outName = inn.batCard[idxToUse].name;
+  inn.batCard[idxToUse] = {
+    id: batImp.id, name: batImp.name, role: batImp.role, ovr: batImp.ovr,
+    bat: batImp.bat || batImp.ovr, sr: batImp.sr || 140,
+    r: 0, b: 0, f4: 0, s6: 0, out: false, howOut: 'not out', batted: false
+  };
+  if (isTeam1Bat) st.impactUsed1 = true; else st.impactUsed2 = true;
+  const note = `⚡ TACTICAL IMPACT SUB: ${inn.batTeamId} brought in ${batImp.name} for ${outName}!`;
+  st.impactNotes.push(note);
+  lmFlashEvent(note, true);
+  const comm = document.getElementById('lmCommentary');
+  if (comm) comm.innerHTML = `<div class="msg" style="border-left-color:#facc15">${note}</div>` + comm.innerHTML;
+  sfxTrade();
+  renderLiveMatchUI();
+}
+
 function renderLiveMatchUI(){
   if (!lmState) return;
   const st = lmState;
@@ -2472,6 +2580,52 @@ function renderLiveMatchUI(){
     return `<div class="ball-pill ${cls}">${out}</div>`;
   }).join('');
 
+  // Live Win Probability Bar & Cricket Coach Tactical HUD
+  let probBat = 50;
+  if (st.finished) {
+    const lastRes = st.isIntl
+      ? state.intlCareer.results[state.intlCareer.results.length - 1]
+      : state.seasonData.matches[state.seasonData.matches.length - 1];
+    probBat = (lastRes && lastRes.winner === inn.batTeamId) ? 100 : 0;
+  } else if (st.innNum === 1) {
+    const proj = inn.runs + (120 - inn.legalBalls) * 1.45 - inn.wkts * 7;
+    probBat = Math.min(82, Math.max(22, Math.round(50 + (proj - 172) * 0.7)));
+  } else {
+    const need = Math.max(0, inn.target - inn.runs);
+    const bl = Math.max(1, 120 - inn.legalBalls);
+    const rrr = (need / bl) * 6;
+    probBat = Math.min(95, Math.max(5, Math.round(62 - (rrr - 9) * 8 - inn.wkts * 4)));
+  }
+  const wpFill = document.getElementById('lmWinProbBar');
+  const wpTxt = document.getElementById('lmWinProbTxt');
+  if (wpFill) wpFill.innerHTML = `<div style="width:${probBat}%;background:${inn.batColor}"></div><div style="width:${100-probBat}%;background:${inn.bowlColor}"></div>`;
+  if (wpTxt) wpTxt.innerHTML = `<span style="color:${inn.batColor}">${inn.batTeamId} ${probBat}%</span><span style="color:var(--muted)">LIVE WIN PROBABILITY</span><span style="color:${inn.bowlColor}">${inn.bowlTeamId} ${100-probBat}%</span>`;
+
+  // Highlight active tactical buttons
+  const tac = st.tactics || { tempo:'BALANCED', bowlPlan:'STUMP', field:'BALANCED' };
+  document.querySelectorAll('#lmTempoRow .chip').forEach(b => b.classList.toggle('active', b.dataset.val === tac.tempo));
+  document.querySelectorAll('#lmBowlPlanRow .chip').forEach(b => b.classList.toggle('active', b.dataset.val === tac.bowlPlan));
+  document.querySelectorAll('#lmFieldRow .chip').forEach(b => b.classList.toggle('active', b.dataset.val === tac.field));
+
+  // Manual Bowler Selector (active at start of over)
+  const bwSel = document.getElementById('lmBowlerSelect');
+  if (bwSel) {
+    const canSwitch = (inn.legalBalls % 6 === 0) && !st.finished;
+    bwSel.disabled = !canSwitch;
+    bwSel.innerHTML = inn.bowlCard.map(b => {
+      const dis = b.ov >= 4 || b.id === inn.lastBowlerId;
+      return `<option value="${b.id}" ${b.id===inn.curBowler.id?'selected':''} ${dis?'disabled':''}>${b.name} (${b.ov}/4 ov, ${b.w}/${b.r}${b.isSpin?', Spin':', Pace'})${b.id===inn.lastBowlerId?' [Rest]':''}</option>`;
+    }).join('');
+  }
+  const impBtn = document.getElementById('btnLmImpactSub');
+  if (impBtn) {
+    const used = st.innNum === 1 ? st.impactUsed1 : st.impactUsed2;
+    const hasImp = !st.isIntl && Boolean(st.innNum === 1 ? st.xii1.impact : st.xii2.impact);
+    impBtn.style.display = hasImp ? 'inline-flex' : 'none';
+    impBtn.disabled = used || st.finished;
+    impBtn.textContent = used ? '⚡ Sub Used' : `⚡ Impact Sub`;
+  }
+
   // Live Mini Scorecard if toggled open
   if (st.showCard) {
     const batted = inn.batCard.filter(b => b.batted);
@@ -2493,9 +2647,27 @@ function renderLiveMatchUI(){
 function commitLiveMatchToSeason(){
   if (!lmState || lmState.committed) return;
   lmState.committed = true;
-  const s = state.seasonData;
   const st = lmState;
   const i1 = st.inn1, i2 = st.inn2;
+
+  if (st.isIntl) {
+    let bWins = i2.runs > i1.runs;
+    if (i2.runs === i1.runs) bWins = Math.random() < 0.5;
+    const winId = bWins ? i2.batTeamId : i1.batTeamId;
+    const margin = i2.runs === i1.runs ? 'Super Over!' : (bWins ? `${10 - i2.wkts} wickets` : `${i1.runs - i2.runs} runs`);
+    const topBat = [...(bWins ? i2.batCard : i1.batCard)].sort((a,b) => b.r - a.r)[0];
+    const potm = topBat ? `${topBat.name} (${topBat.r} off ${topBat.b})` : winId;
+    if (typeof recordIntlMatchResult === 'function') {
+      recordIntlMatchResult(winId, margin, potm, i1.batTeamId, `${i1.runs}/${i1.wkts}`, i2.batTeamId, `${i2.runs}/${i2.wkts}`, i1.batCard, i2.batCard, i1.bowlCard, i2.bowlCard);
+    }
+    const comm = document.getElementById('lmCommentary');
+    if (comm) comm.innerHTML = `<div class="msg" style="border-left-color:#10b981">🌍🏆 <b>FULL TIME:</b> <b>${winId}</b> won by <b>${margin}</b>! POTM: <b>${potm}</b>.</div>` + comm.innerHTML;
+    sfxCrowdRoar(1.3);
+    fireConfetti(bWins ? i2.batColor : i1.batColor);
+    return;
+  }
+
+  const s = state.seasonData;
   const A = s.table[i1.batTeamId], B = s.table[i2.batTeamId];
   const idx = s.nextIndex;
 
