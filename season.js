@@ -150,7 +150,8 @@ function openXIEditor(tid){
   document.getElementById('xiEdTitle').textContent = `✏️ ${t.id} PLAYING XII & BATTING ORDER`;
   document.getElementById('xiEdSub').textContent = `${t.home} • ▲ ▼ to reorder (4 OS in XI = Indian Impact Only)`;
   renderXIEditorList();
-  document.getElementById('xiEditorBackdrop').classList.add('open');
+  const xiEl = document.getElementById('xiEditorBackdrop');
+  if (xiEl) { xiEl.style.zIndex = '99'; xiEl.classList.add('open'); }
 }
 
 function moveXIPlayer(pid, delta){
