@@ -1170,6 +1170,71 @@
   </div>
 </div>
 
+
+<!-- V44: FULL LIVE BALL-BY-BALL & OVER-BY-OVER MATCH SIMULATION CENTRE -->
+<div class="backdrop" id="liveMatchBackdrop">
+  <div class="drawer" style="max-width:760px;max-height:92vh">
+    <div class="drawer-head">
+      <div>
+        <div class="sec-title" id="lmTitle">🏏 LIVE MATCH CENTRE</div>
+        <div style="font-size:11px;color:var(--muted)" id="lmSub">Venue • Toss &amp; Pitch</div>
+      </div>
+      <div style="display:flex;gap:6px;align-items:center">
+        <span class="pill pill-live" id="lmModePill">LIVE SIM</span>
+        <button class="icon-btn" onclick="closeLiveMatchModal()" title="Close">✕</button>
+      </div>
+    </div>
+
+    <!-- Broadcast Live Scoreboard Banner -->
+    <div class="lm-scoreboard">
+      <div class="lm-score-top">
+        <div>
+          <div class="lm-inn-tag" id="lmInnTag">1ST INNINGS</div>
+          <div class="lm-big-score" id="lmBigScore">SRH 0/0 <span class="lm-ov">(0.0 ov)</span></div>
+        </div>
+        <div style="text-align:right">
+          <div class="lm-rate" id="lmRunRate">CRR: 0.00</div>
+          <div class="lm-target" id="lmTargetEq">First Innings Underway</div>
+        </div>
+      </div>
+      <div class="lm-event-flash" id="lmEventFlash" style="display:none"></div>
+      <div class="over-balls-row" id="lmThisOverBalls" style="margin:8px 0 2px"></div>
+    </div>
+
+    <!-- On-Crease Batters & Current Bowler Strip -->
+    <div class="lm-crease-grid">
+      <div class="lm-crease-card">
+        <div class="lm-crease-lbl">🏏 AT THE CREASE</div>
+        <div class="lm-batter-row active" id="lmStrikerRow">Striker: —</div>
+        <div class="lm-batter-row" id="lmNonStrikerRow">Non-Striker: —</div>
+      </div>
+      <div class="lm-crease-card">
+        <div class="lm-crease-lbl">🎯 CURRENT BOWLER</div>
+        <div class="lm-bowler-row" id="lmBowlerRow">Bowler: —</div>
+        <div class="lm-last-wkt" id="lmLastWkt">Partnership: 0 (0)</div>
+      </div>
+    </div>
+
+    <!-- Interactive Match Controls -->
+    <div class="btn-row-3" id="lmControlsPrimary" style="margin-top:0">
+      <button class="btn btn-gold" id="btnLmBall" onclick="lmBowlBall()">🏏 Next Ball</button>
+      <button class="btn btn-blue" id="btnLmOver" onclick="lmBowlOver()">⏩ Next Over</button>
+      <button class="btn btn-green" id="btnLmAuto" onclick="lmToggleAuto()">▶ Auto-Play</button>
+    </div>
+    <div class="btn-row-3" style="margin-top:0">
+      <button class="btn btn-sm" id="btnLmSpeed" onclick="lmCycleSpeed()">⚡ Speed: 1x</button>
+      <button class="btn btn-sm btn-purple" id="btnLmCardToggle" onclick="lmToggleScorecard()">📋 Live Scorecard</button>
+      <button class="btn btn-sm btn-warn" id="btnLmSkip" onclick="lmSkipToEnd()">⏭️ Skip Match</button>
+    </div>
+
+    <!-- Collapsible Live Scorecard View -->
+    <div id="lmLiveCardWrap" style="display:none;max-height:30vh;overflow-y:auto"></div>
+
+    <!-- Live Ball-by-Ball Commentary Feed -->
+    <div class="chat-feed" id="lmCommentary" style="max-height:28vh"></div>
+  </div>
+</div>
+
 <!-- Live Ball-by-Ball Final Over Thriller Drawer -->
 <div class="backdrop" id="finalOverBackdrop" onclick="if(event.target===this)closeDrawers()">
   <div class="drawer" style="max-width:600px">

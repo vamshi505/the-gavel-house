@@ -1074,9 +1074,13 @@ async function openPreMatchPreview(mode='NORMAL'){
 
   document.getElementById('pmTitle').textContent = `${fx.label.toUpperCase()}: ${fx.t1Id} vs ${fx.t2Id}`;
   document.getElementById('pmVenue').textContent = `Pitch: ${fx.pitch}`;
+  const isGMPreview = Boolean(state.humanTeamId);
+  const myMatchPreview = isGMPreview && (fx.t1Id === state.humanTeamId || fx.t2Id === state.humanTeamId);
   document.getElementById('btnConfirmStartMatch').textContent = mode === 'FINAL_OVER'
     ? 'Confirm XIs & Start Final Over'
-    : 'Confirm XIs & Start Match';
+    : (!isGMPreview || myMatchPreview)
+      ? '🏏 Confirm XIs & Play Live Match'
+      : '⚡ Simulate Rival Match (View Scorecard)';
   document.getElementById('preMatchBackdrop').classList.add('open');
   await analysePreMatchLineups(false);
 }
@@ -1187,8 +1191,9 @@ function renderPreMatchToss(){
 
 async function confirmAndStartPreMatch(){
   if (!pendingPreMatch) return;
-  const mode = pendingPreMatch.mode;
-  const tossInfo = { tossWinner: pendingPreMatch.tossWinner, decision: pendingPreMatch.decision, batFirstId: pendingPreMatch.batFirstId, dew: pendingPreMatch.dew };
+  const fx = pendingPreMatch;
+  const mode = fx.mode;
+  const tossInfo = { tossWinner: fx.tossWinner, decision: fx.decision, batFirstId: fx.batFirstId, dew: fx.dew };
   pendingPreMatch = null;
   document.getElementById('preMatchBackdrop').classList.remove('open');
 
@@ -1196,12 +1201,24 @@ async function confirmAndStartPreMatch(){
     launchFinalOverConfirmed();
     return;
   }
+
+  // GM MODE RULE: Play Live Match Simulation ONLY for your own franchise's matches;
+  // Other teams' matches auto-simulate instantly so you can view their full scorecard!
+  // AUCTIONEER MODE: Play Live Match Simulation for EVERY match (or skip anytime)!
+  const isGM = Boolean(state.humanTeamId);
+  const involvesMyTeam = isGM && (fx.t1Id === state.humanTeamId || fx.t2Id === state.humanTeamId);
+
+  if (!isGM || involvesMyTeam) {
+    startLiveMatchSimulation(fx, tossInfo);
+    return;
+  }
+
   const btn = document.getElementById('btnNextMatch');
   if (btn) btn.disabled = true;
   const m = await runOneSeasonMatch(true, tossInfo);
   if (btn) btn.disabled = false;
   if (!m) return;
-  if (m.injury) showToast(`🚑 Injury: ${m.injury.out} (${m.injury.team}) → Replaced by ${m.injury.inName}!`);
+  showToast(`📋 ${m.t1} vs ${m.t2} simulated (${m.winner} won) — tap Latest Match for full scorecard!`);
   sfxPaddle();
   renderSeason();
   renderSquads();
@@ -1934,3 +1951,500 @@ function downloadSquadPNG(){
 
 // Safe Boot with error guard
 
+
+
+// ============================================================================
+// V44: FULL LIVE BALL-BY-BALL & OVER-BY-OVER MATCH SIMULATION ENGINE
+// ============================================================================
+let lmState = null;
+let lmAutoTimer = null;
+let lmSpeedLevel = 1; // 1 = 1x (650ms), 2 = 2x (300ms), 3 = 5x (95ms)
+
+function lmStopAuto(){
+  if (lmAutoTimer) { clearInterval(lmAutoTimer); lmAutoTimer = null; }
+  const b = document.getElementById('btnLmAuto');
+  if (b) { b.textContent = '▶ Auto-Play'; b.className = 'btn btn-green'; }
+}
+
+function closeLiveMatchModal(){
+  lmStopAuto();
+  if (lmState && !lmState.finished) {
+    if (!confirm('Finish & commit this match to the season before closing? (Cancel to keep watching)')) return;
+    lmSkipToEnd();
+  }
+  document.getElementById('liveMatchBackdrop')?.classList.remove('open');
+}
+
+function buildLiveBowlingRotation(bowlXI){
+  const spec = bowlXI.filter(p => p.role === 'BW');
+  const ars = bowlXI.filter(p => p.role === 'AR');
+  const pool = [...spec, ...ars];
+  const finalPool = (pool.length >= 5 ? pool : bowlXI).slice(0, 6);
+  return finalPool.map(p => ({
+    id: p.id, name: p.name, ov: 0, balls: 0, r: 0, w: 0,
+    ovr: p.ovr || 78, bowl: p.bowl || p.ovr || 78, econ: p.econ || 8.2,
+    phase: p.phase || '', isSpin: isSpinner(p)
+  }));
+}
+
+function pickBowlerForOver(bowlers, overNum, lastBowlerId, isSpinTrack){
+  const eligible = bowlers.filter(b => b.id !== lastBowlerId && b.ov < 4);
+  const pool = eligible.length ? eligible : bowlers.filter(b => b.ov < 4);
+  if (!pool.length) return bowlers[0];
+  // Phase-aware bowling selection: PP (0-5) pacers, Middle (6-14) spinners, Death (15-19) death pacers!
+  const scored = pool.map(b => {
+    let sc = b.bowl + (4 - b.ov) * 3;
+    if (overNum < 6 && !b.isSpin) sc += 10;
+    if (overNum >= 6 && overNum < 15 && b.isSpin) sc += (isSpinTrack ? 16 : 9);
+    if (overNum >= 15 && (b.phase === 'Death Pace' || (!b.isSpin && b.econ <= 8.2))) sc += 14;
+    return { b, sc: sc + Math.random() * 6 };
+  }).sort((a,b) => b.sc - a.sc);
+  return scored[0].b;
+}
+
+function initLiveInnings(batTeam, bowlTeam, batXI, bowlXI, venue, target=null){
+  const batCard = batXI.map(p => ({
+    id: p.id, name: p.name, role: p.role, ovr: p.ovr || 75, bat: p.bat || p.ovr || 75,
+    sr: p.sr || 135, r: 0, b: 0, f4: 0, s6: 0, out: false, howOut: 'not out', batted: false
+  }));
+  batCard[0].batted = true;
+  batCard[1].batted = true;
+  const bowlCard = buildLiveBowlingRotation(bowlXI);
+  const isSpinTrack = /chepauk|ekana|jaipur/i.test(venue);
+  const firstBowler = pickBowlerForOver(bowlCard, 0, -1, isSpinTrack);
+  return {
+    batTeamId: batTeam.id, batTeamName: batTeam.name, batColor: batTeam.color,
+    bowlTeamId: bowlTeam.id, bowlTeamName: bowlTeam.name, bowlColor: bowlTeam.color,
+    batXI, bowlXI, batCard, bowlCard,
+    runs: 0, wkts: 0, legalBalls: 0, extras: 0, target,
+    strikerIdx: 0, nonStrikerIdx: 1, nextBatIdx: 2,
+    curBowler: firstBowler, lastBowlerId: -1,
+    thisOver: [], partRuns: 0, partBalls: 0,
+    lastWktText: 'Opening Partnership', done: false
+  };
+}
+
+function startLiveMatchSimulation(fx, tossInfo){
+  lmStopAuto();
+  const t1Id = tossInfo.batFirstId;
+  const t2Id = (t1Id === fx.t1Id) ? fx.t2Id : fx.t1Id;
+  const team1 = state.teams.find(x => x.id === t1Id);
+  const team2 = state.teams.find(x => x.id === t2Id);
+  const xii1 = computePlayingXII(team1, fx.pitch);
+  const xii2 = computePlayingXII(team2, fx.pitch);
+
+  const inn1 = initLiveInnings(team1, team2, [...xii1.xi], [...xii2.xi], fx.pitch, null);
+
+  lmState = {
+    fx, tossInfo, team1, team2, xii1, xii2,
+    venue: fx.pitch,
+    innNum: 1,
+    inn1,
+    inn2: null,
+    impactNotes: [],
+    finished: false,
+    committed: false,
+    showCard: false
+  };
+
+  document.getElementById('lmTitle').textContent = `🏏 ${fx.label.toUpperCase()}: ${team1.id} vs ${team2.id}`;
+  document.getElementById('lmSub').textContent = `📍 ${fx.pitch.split(' (')[0]} • 🪙 ${tossInfo.tossWinner} won toss & chose to ${tossInfo.decision} • 💧 ${tossInfo.dew}`;
+  document.getElementById('lmModePill').textContent = state.humanTeamId ? `🛡️ ${state.humanTeamId} LIVE` : '🎙️ AUCTIONEER LIVE';
+  document.getElementById('lmLiveCardWrap').style.display = 'none';
+  document.getElementById('lmEventFlash').style.display = 'none';
+  document.getElementById('btnLmBall').disabled = false;
+  document.getElementById('btnLmOver').disabled = false;
+  document.getElementById('btnLmAuto').disabled = false;
+  document.getElementById('btnLmSkip').disabled = false;
+
+  const comm = document.getElementById('lmCommentary');
+  comm.innerHTML = `
+    <div class="msg" style="border-left-color:${team1.color}">
+      🏟️ <b>MATCH STARTED!</b> <b>${inn1.batCard[0].name}</b> &amp; <b>${inn1.batCard[1].name}</b> walk out to open for <b>${team1.id}</b>. <b>${inn1.curBowler.name}</b> takes the new ball for <b>${team2.id}</b>!
+    </div>`;
+
+  renderLiveMatchUI();
+  document.getElementById('liveMatchBackdrop').classList.add('open');
+  sfxCrowdRoar(0.8);
+}
+
+function lmFormatOvers(balls){
+  return `${Math.floor(balls / 6)}.${balls % 6}`;
+}
+
+function lmFlashEvent(text, isMilestone=false){
+  const el = document.getElementById('lmEventFlash');
+  if (!el) return;
+  el.textContent = text;
+  el.className = 'lm-event-flash' + (isMilestone ? ' milestone' : '');
+  el.style.display = 'block';
+  clearTimeout(el._tm);
+  el._tm = setTimeout(() => { el.style.display = 'none'; }, 2400);
+}
+
+function lmStepSingleBall(silent=false){
+  if (!lmState || lmState.finished) return;
+  const st = lmState;
+  const inn = st.innNum === 1 ? st.inn1 : st.inn2;
+  if (!inn || inn.done) return;
+
+  const striker = inn.batCard[inn.strikerIdx];
+  const bowler = inn.curBowler;
+  const overNum = Math.floor(inn.legalBalls / 6);
+  const venueL = st.venue.toLowerCase();
+  const isFlat = venueL.includes('chinnaswamy') || venueL.includes('uppal') || venueL.includes('wankhede');
+  const isSpin = venueL.includes('chepauk') || venueL.includes('ekana') || venueL.includes('jaipur');
+  const isDew = st.innNum === 2 && st.tossInfo.dew && st.tossInfo.dew.includes('Heavy');
+
+  // Realistic T20 phase & skill-weighted ball outcome
+  const skillDiff = ((striker.bat || 75) - (bowler.bowl || 75)) * 0.25;
+  const phaseAgg = overNum < 6 ? 4 : overNum >= 15 ? 8 : 0;
+  const pitchMod = isFlat ? 5 : (isSpin && bowler.isSpin ? -5 : 0);
+  const dewMod = isDew ? 4 : 0;
+  const roll = Math.random() * 100 + skillDiff + phaseAgg * 0.4 + pitchMod + dewMod;
+
+  let code = '1', runs = 1, isWkt = false, isExtra = false, commText = '';
+
+  if (Math.random() < 0.025) {
+    // Wide ball (extra run, no legal ball consumed)
+    isExtra = true; code = 'Wd'; runs = 1;
+    inn.runs += 1; inn.extras += 1; bowler.r += 1; inn.partRuns += 1;
+    inn.thisOver.push('Wd');
+    commText = `Wide down leg from ${bowler.name} — 1 extra run.`;
+  } else {
+    inn.legalBalls += 1;
+    bowler.balls += 1;
+    striker.b += 1;
+    inn.partBalls += 1;
+
+    // Wicket probability (~4.8% base, slightly higher in death overs or vs tailenders)
+    const tailPenalty = striker.role === 'BW' ? 4.5 : 0;
+    const wktThresh = Math.max(3.0, 5.2 + tailPenalty + (overNum >= 16 ? 2.2 : 0) - skillDiff * 0.25);
+
+    if (roll < wktThresh) {
+      isWkt = true; code = 'W'; runs = 0;
+      inn.wkts += 1; bowler.w += 1;
+      striker.out = true;
+      const modes = bowler.isSpin
+        ? ['b ' + bowler.name, 'c & b ' + bowler.name, 'st WK b ' + bowler.name, 'lbw b ' + bowler.name]
+        : ['b ' + bowler.name, 'c deep mid-wicket b ' + bowler.name, 'c behind b ' + bowler.name, 'lbw b ' + bowler.name];
+      striker.howOut = modes[Math.floor(Math.random() * modes.length)];
+      inn.thisOver.push('W');
+      inn.lastWktText = `Last Wkt: ${striker.name} ${striker.r}(${striker.b}) — ${striker.howOut}`;
+      commText = `💥 <b>WICKET!</b> <b>${striker.name}</b> out (${striker.howOut}) for <b>${striker.r} (${striker.b})</b>! ${inn.batTeamId} ${inn.runs}/${inn.wkts}.`;
+      if (!silent) {
+        lmFlashEvent(`💥 WICKET! ${striker.name} OUT (${striker.r} off ${striker.b}) — ${bowler.name} strikes!`, false);
+        sfxUnsold();
+      }
+      inn.partRuns = 0; inn.partBalls = 0;
+      if (inn.wkts < 10 && inn.nextBatIdx < inn.batCard.length) {
+        inn.strikerIdx = inn.nextBatIdx++;
+        inn.batCard[inn.strikerIdx].batted = true;
+        commText += ` <b>${inn.batCard[inn.strikerIdx].name}</b> walks to the crease.`;
+      }
+    } else if (roll < 36) {
+      code = '0'; runs = 0;
+      inn.thisOver.push('0');
+      commText = `Dot ball — ${bowler.name} keeps ${striker.name} quiet.`;
+    } else if (roll < 70) {
+      code = '1'; runs = 1;
+      inn.runs += 1; striker.r += 1; bowler.r += 1; inn.partRuns += 1;
+      inn.thisOver.push('1');
+      commText = `${striker.name} works ${bowler.name} into the gap for a single.`;
+      [inn.strikerIdx, inn.nonStrikerIdx] = [inn.nonStrikerIdx, inn.strikerIdx];
+    } else if (roll < 80) {
+      code = '2'; runs = 2;
+      inn.runs += 2; striker.r += 2; bowler.r += 2; inn.partRuns += 2;
+      inn.thisOver.push('2');
+      commText = `Good running! ${striker.name} tucks it deep for TWO.`;
+    } else if (roll < 92) {
+      code = '4'; runs = 4;
+      inn.runs += 4; striker.r += 4; striker.f4 += 1; bowler.r += 4; inn.partRuns += 4;
+      inn.thisOver.push('4');
+      commText = `🔥 <b>FOUR!</b> Crisp boundary by <b>${striker.name}</b> off ${bowler.name}!`;
+      if (!silent) sfxPaddle();
+    } else {
+      code = '6'; runs = 6;
+      inn.runs += 6; striker.r += 6; striker.s6 += 1; bowler.r += 6; inn.partRuns += 6;
+      inn.thisOver.push('6');
+      commText = `🚀 <b>SIX!</b> <b>${striker.name}</b> smashes ${bowler.name} into the stands!`;
+      if (!silent) sfxHijack();
+    }
+
+    // Milestone check (50 / 100)
+    if (!isWkt && !silent) {
+      const prevR = striker.r - runs;
+      if (prevR < 50 && striker.r >= 50) lmFlashEvent(`🔥 FIFTY! ${striker.name} reaches ${striker.r} (${striker.b})!`, true);
+      else if (prevR < 100 && striker.r >= 100) lmFlashEvent(`💯 CENTURY! ${striker.name} reaches ${striker.r} (${striker.b})!`, true);
+    }
+
+    // End of Over handling
+    if (inn.legalBalls % 6 === 0) {
+      bowler.ov += 1;
+      bowler.balls = 0;
+      [inn.strikerIdx, inn.nonStrikerIdx] = [inn.nonStrikerIdx, inn.strikerIdx];
+      if (inn.legalBalls < 120 && inn.wkts < 10 && !(inn.target && inn.runs >= inn.target)) {
+        inn.lastBowlerId = bowler.id;
+        inn.curBowler = pickBowlerForOver(inn.bowlCard, Math.floor(inn.legalBalls / 6), inn.lastBowlerId, isSpin);
+        inn.thisOver = [];
+      }
+    }
+  }
+
+  if (!silent) {
+    const comm = document.getElementById('lmCommentary');
+    const ovStr = isExtra ? lmFormatOvers(inn.legalBalls) : lmFormatOvers(inn.legalBalls);
+    comm.innerHTML = `<div class="msg" style="border-left-color:${isWkt?'#e11d48':code==='6'?'#facc15':code==='4'?'#38bdf8':inn.batColor}"><b>${ovStr}:</b> ${commText}</div>` + comm.innerHTML;
+    const msgs = comm.querySelectorAll('.msg');
+    if (msgs.length > 45) msgs[msgs.length - 1].remove();
+  }
+
+  // Check Innings Completion
+  const chased = Boolean(inn.target && inn.runs >= inn.target);
+  if (chased || inn.wkts >= 10 || inn.legalBalls >= 120) {
+    inn.done = true;
+    if (st.innNum === 1) {
+      // Start Innings 2 (with smart Impact Player substitution!)
+      const xi2Bat = [...st.xii2.xi];
+      const xi1Bowl = [...st.xii1.xi];
+      if (st.xii2.impact && inn.runs >= 165 && (st.xii2.impact.role === 'B' || st.xii2.impact.role === 'WK' || st.xii2.impact.role === 'AR')) {
+        const wIdx = xi2Bat.map((p,i)=>({p,i})).filter(x=>x.p.role==='BW').sort((a,b)=>(a.p.bat||30)-(b.p.bat||30))[0]?.i;
+        if (wIdx !== undefined) {
+          st.impactNotes.push(`${st.team2.id} subbed in ⚡${st.xii2.impact.name} for ${xi2Bat[wIdx].name}`);
+          xi2Bat[wIdx] = st.xii2.impact;
+        }
+      }
+      if (st.xii1.impact && (st.xii1.impact.role === 'BW' || st.xii1.impact.role === 'AR')) {
+        const bIdx = xi1Bowl.map((p,i)=>({p,i})).filter(x=>x.p.role==='B').sort((a,b)=>(a.p.bowl||20)-(b.p.bowl||20))[0]?.i;
+        if (bIdx !== undefined) {
+          st.impactNotes.push(`${st.team1.id} subbed in ⚡${st.xii1.impact.name} for ${xi1Bowl[bIdx].name}`);
+          xi1Bowl[bIdx] = st.xii1.impact;
+        }
+      }
+      st.innNum = 2;
+      st.inn2 = initLiveInnings(st.team2, st.team1, xi2Bat, xi1Bowl, st.venue, inn.runs + 1);
+      if (!silent) {
+        lmFlashEvent(`🏏 INNINGS BREAK! ${st.team2.id} need ${inn.runs + 1} runs to win!`, true);
+        const comm = document.getElementById('lmCommentary');
+        comm.innerHTML = `<div class="msg" style="border-left-color:#10b981"><b>INNINGS 2 BEGINS:</b> ${st.team1.id} finished on <b>${inn.runs}/${inn.wkts} (${lmFormatOvers(inn.legalBalls)})</b>. <b>${st.inn2.batCard[0].name}</b> &amp; <b>${st.inn2.batCard[1].name}</b> open the chase for <b>${st.team2.id}</b> (Target: <b>${inn.runs + 1}</b>)!${st.impactNotes.length ? '<br/>⚡ ' + st.impactNotes.join(' • ') : ''}</div>` + comm.innerHTML;
+      }
+    } else {
+      // Match Finished!
+      st.finished = true;
+      lmStopAuto();
+      commitLiveMatchToSeason();
+    }
+  }
+}
+
+function lmBowlBall(){
+  if (!lmState || lmState.finished) return;
+  lmStepSingleBall(false);
+  renderLiveMatchUI();
+}
+
+function lmBowlOver(){
+  if (!lmState || lmState.finished) return;
+  const startInn = lmState.innNum;
+  const inn = startInn === 1 ? lmState.inn1 : lmState.inn2;
+  const targetBalls = Math.min(120, (Math.floor(inn.legalBalls / 6) + 1) * 6);
+  let guard = 0;
+  while (lmState && !lmState.finished && lmState.innNum === startInn && inn.legalBalls < targetBalls && guard < 15) {
+    lmStepSingleBall(false);
+    guard++;
+  }
+  renderLiveMatchUI();
+}
+
+function lmToggleAuto(){
+  if (!lmState || lmState.finished) return;
+  if (lmAutoTimer) { lmStopAuto(); return; }
+  const delays = [0, 620, 260, 85];
+  const b = document.getElementById('btnLmAuto');
+  if (b) { b.textContent = '⏸ Pause'; b.className = 'btn btn-warn'; }
+  lmAutoTimer = setInterval(() => {
+    if (!lmState || lmState.finished) { lmStopAuto(); return; }
+    lmStepSingleBall(false);
+    renderLiveMatchUI();
+  }, delays[lmSpeedLevel] || 620);
+}
+
+function lmCycleSpeed(){
+  lmSpeedLevel = lmSpeedLevel >= 3 ? 1 : lmSpeedLevel + 1;
+  const b = document.getElementById('btnLmSpeed');
+  if (b) b.textContent = lmSpeedLevel === 3 ? '⚡ Speed: 5x' : lmSpeedLevel === 2 ? '🚀 Speed: 2x' : '⚡ Speed: 1x';
+  if (lmAutoTimer) { lmStopAuto(); lmToggleAuto(); }
+}
+
+function lmSkipToEnd(){
+  if (!lmState || lmState.finished) return;
+  lmStopAuto();
+  let guard = 0;
+  while (!lmState.finished && guard < 400) {
+    lmStepSingleBall(true);
+    guard++;
+  }
+  renderLiveMatchUI();
+}
+
+function lmToggleScorecard(){
+  if (!lmState) return;
+  lmState.showCard = !lmState.showCard;
+  document.getElementById('lmLiveCardWrap').style.display = lmState.showCard ? 'block' : 'none';
+  renderLiveMatchUI();
+}
+
+function renderLiveMatchUI(){
+  if (!lmState) return;
+  const st = lmState;
+  const inn = st.innNum === 1 ? st.inn1 : st.inn2;
+  if (!inn) return;
+
+  document.getElementById('lmInnTag').textContent = st.finished ? '🏆 FULL TIME' : (st.innNum === 1 ? `1ST INNINGS • ${inn.batTeamId}` : `2ND INNINGS CHASE • ${inn.batTeamId}`);
+  document.getElementById('lmBigScore').innerHTML = `${inn.batTeamId} ${inn.runs}/${inn.wkts} <span class="lm-ov">(${lmFormatOvers(inn.legalBalls)} ov)</span>`;
+
+  const ovFloat = Math.max(0.16, inn.legalBalls / 6);
+  const crr = (inn.runs / ovFloat).toFixed(2);
+  document.getElementById('lmRunRate').textContent = `CRR: ${crr}`;
+
+  if (st.finished) {
+    const m = state.seasonData.matches[state.seasonData.matches.length - 1];
+    document.getElementById('lmTargetEq').textContent = `🏆 ${m.winner} won by ${m.margin}`;
+    document.getElementById('btnLmBall').disabled = true;
+    document.getElementById('btnLmOver').disabled = true;
+    document.getElementById('btnLmAuto').disabled = true;
+    document.getElementById('btnLmSkip').disabled = true;
+  } else if (st.innNum === 2) {
+    const need = Math.max(0, inn.target - inn.runs);
+    const ballsLeft = Math.max(0, 120 - inn.legalBalls);
+    const rrr = ballsLeft > 0 ? ((need / ballsLeft) * 6).toFixed(2) : '0.00';
+    document.getElementById('lmTargetEq').textContent = `${inn.batTeamId} need ${need} off ${ballsLeft}b (RRR ${rrr})`;
+  } else {
+    document.getElementById('lmTargetEq').textContent = `1st Innings • Setting Target`;
+  }
+
+  // On-crease batters & bowler
+  const sBat = inn.batCard[inn.strikerIdx];
+  const nsBat = inn.batCard[inn.nonStrikerIdx];
+  const bw = inn.curBowler;
+  document.getElementById('lmStrikerRow').textContent = sBat ? `★ ${sBat.name}* — ${sBat.r} (${sBat.b}) [4s:${sBat.f4} 6s:${sBat.s6}]` : '—';
+  document.getElementById('lmNonStrikerRow').textContent = nsBat ? `  ${nsBat.name} — ${nsBat.r} (${nsBat.b})` : '—';
+  const bwOv = `${bw.ov}.${bw.balls}`;
+  const bwEcon = (bw.r / Math.max(0.16, bw.ov + bw.balls / 6)).toFixed(2);
+  document.getElementById('lmBowlerRow').textContent = `${bw.name} — ${bwOv}-0-${bw.r}-${bw.w} (Econ ${bwEcon})`;
+  document.getElementById('lmLastWkt').textContent = `P'ship: ${inn.partRuns}(${inn.partBalls}) • ${inn.lastWktText}`;
+
+  // This Over Ball Pills
+  const pills = inn.thisOver.slice(-6);
+  document.getElementById('lmThisOverBalls').innerHTML = Array.from({ length: 6 }, (_, i) => {
+    const out = pills[i];
+    if (!out) return `<div class="ball-pill">${i + 1}</div>`;
+    const cls = out === '6' ? 'b-6' : out === '4' ? 'b-4' : out === 'W' ? 'b-w' : out === '0' ? 'b-0' : 'b-r';
+    return `<div class="ball-pill ${cls}">${out}</div>`;
+  }).join('');
+
+  // Live Mini Scorecard if toggled open
+  if (st.showCard) {
+    const batted = inn.batCard.filter(b => b.batted);
+    const bowled = inn.bowlCard.filter(b => b.ov > 0 || b.balls > 0);
+    document.getElementById('lmLiveCardWrap').innerHTML = `
+      <div class="tbl-wrap" style="background:var(--input-bg);border:1px solid var(--card-border);border-radius:5px;padding:6px">
+        <table>
+          <thead><tr><th>Batter</th><th>Status</th><th>R</th><th>B</th><th>4s</th><th>6s</th></tr></thead>
+          <tbody>${batted.map(b=>`<tr><td><b>${b.name}</b></td><td style="font-size:10px;color:var(--muted)">${b.out?b.howOut:'not out*'}</td><td><b>${b.r}</b></td><td>${b.b}</td><td>${b.f4}</td><td>${b.s6}</td></tr>`).join('')}</tbody>
+        </table>
+        <table style="margin-top:6px">
+          <thead><tr><th>Bowler</th><th>O</th><th>R</th><th>W</th><th>Econ</th></tr></thead>
+          <tbody>${bowled.map(b=>`<tr><td><b>${b.name}</b></td><td>${b.ov}.${b.balls}</td><td>${b.r}</td><td><b>${b.w}</b></td><td>${(b.r/Math.max(0.16,b.ov+b.balls/6)).toFixed(2)}</td></tr>`).join('')}</tbody>
+        </table>
+      </div>`;
+  }
+}
+
+function commitLiveMatchToSeason(){
+  if (!lmState || lmState.committed) return;
+  lmState.committed = true;
+  const s = state.seasonData;
+  const st = lmState;
+  const i1 = st.inn1, i2 = st.inn2;
+  const A = s.table[i1.batTeamId], B = s.table[i2.batTeamId];
+  const idx = s.nextIndex;
+
+  // Determine winner (handle tie via instant Super Over!)
+  let bWins = i2.runs > i1.runs;
+  let superOverData = null;
+  if (i2.runs === i1.runs) {
+    const soA = Math.floor(10 + Math.random() * 12);
+    let soB = Math.floor(10 + Math.random() * 12);
+    if (soB === soA) soB += 2;
+    bWins = soB > soA;
+    superOverData = { t1: A.id, r1: soA, w1: 1, t2: B.id, r2: soB, w2: 1, winner: bWins ? B.id : A.id };
+  }
+  const winner = bWins ? B : A;
+  const margin = superOverData
+    ? `Super Over (${superOverData.t1} ${superOverData.r1}/${superOverData.w1} vs ${superOverData.t2} ${superOverData.r2}/${superOverData.w2})`
+    : (bWins ? `${10 - i2.wkts} wickets` : `${i1.runs - i2.runs} runs`);
+
+  // Convert live innings to standard season scorecard format & update pStats + playerForm
+  const toStdInn = (inn) => {
+    const batCard = inn.batCard.filter(b => b.batted).map(b => {
+      if (s.pStats[b.id]) { s.pStats[b.id].runs += b.r; s.pStats[b.id].impact += b.r * 1.1; }
+      return { name: b.name, r: b.r, b: b.b, f4: b.f4, s6: b.s6, sr: ((b.r / Math.max(1, b.b)) * 100).toFixed(1), out: b.out };
+    });
+    const bowlCard = inn.bowlCard.filter(b => b.ov > 0 || b.balls > 0).map(b => {
+      if (s.pStats[b.id]) { s.pStats[b.id].wkts += b.w; s.pStats[b.id].impact += b.w * 25; }
+      return { id: b.id, name: b.name, ov: +(b.ov + b.balls / 10).toFixed(1), r: b.r, w: b.w };
+    });
+    return { team: inn.batTeamId, score: `${inn.runs}/${inn.wkts}`, overs: lmFormatOvers(inn.legalBalls), batCard, bowlCard };
+  };
+
+  const stdInn1 = toStdInn(i1);
+  const stdInn2 = toStdInn(i2);
+  const winBat = [...(bWins ? stdInn2.batCard : stdInn1.batCard)].sort((x,y)=>y.r-x.r)[0];
+  const winBowl = [...(bWins ? stdInn1.bowlCard : stdInn2.bowlCard)].sort((x,y)=>y.w-x.w || x.r-y.r)[0];
+  const potm = (winBowl && winBowl.w >= 3) ? `${winBowl.name} (${winBowl.w}/${winBowl.r})` : (winBat ? `${winBat.name} (${winBat.r} off ${winBat.b})` : winner.id);
+
+  const injury = idx < 73 ? triggerAutoMatchInjury([i1.batTeamId, i2.batTeamId], st.fx.label) : null;
+  const injNote = injury ? `🚑 Injured: ${injury.out} (${injury.team}) → Replaced by ${injury.inName}` : '✅ No injuries';
+  const oneLiner = `🏏 LIVE SIM: ${winner.id} beat ${bWins?A.id:B.id} by ${margin} — POTM: ${potm}. ${injNote}`;
+
+  const mObj = {
+    idx: s.matches.length, label: st.fx.label, venue: st.venue.split(' (')[0],
+    t1: A.id, s1: stdInn1.score, t2: B.id, s2: stdInn2.score,
+    winner: winner.id, margin, potm, injury, superOver: superOverData,
+    impactNotes: st.impactNotes, oneLiner, inn1: stdInn1, inn2: stdInn2
+  };
+  s.matches.push(mObj);
+
+  const ov1 = i1.wkts >= 10 ? 20.0 : +(Math.floor(i1.legalBalls/6) + (i1.legalBalls%6)/6).toFixed(2);
+  const ov2 = i2.wkts >= 10 ? 20.0 : +(Math.floor(i2.legalBalls/6) + (i2.legalBalls%6)/6).toFixed(2);
+
+  if (idx < 70) {
+    A.m++; B.m++;
+    A.rf += i1.runs; A.of += ov1; A.ra += i2.runs; A.oa += ov2;
+    B.rf += i2.runs; B.of += ov2; B.ra += i1.runs; B.oa += ov1;
+    if (!A.form) A.form = []; if (!B.form) B.form = [];
+    if (winner.id === A.id) { A.w++; A.pts += 2; B.l++; A.form.push('W'); B.form.push('L'); }
+    else { B.w++; B.pts += 2; A.l++; B.form.push('W'); A.form.push('L'); }
+    if (A.form.length > 5) A.form.shift();
+    if (B.form.length > 5) B.form.shift();
+    s.standings = Object.values(s.table).map(t => {
+      t.nrr = +((t.rf / Math.max(1, t.of)) - (t.ra / Math.max(1, t.oa))).toFixed(3);
+      return t;
+    }).sort((a,b) => b.pts - a.pts || b.nrr - a.nrr);
+  } else if (idx === 70) { s.playoffWinners.q1W = winner.id; s.playoffWinners.q1L = winner.id === A.id ? B.id : A.id; }
+  else if (idx === 71) { s.playoffWinners.elW = winner.id; }
+  else if (idx === 72) { s.playoffWinners.q2W = winner.id; }
+  else if (idx === 73) { s.champId = winner.id; s.runnerId = winner.id === A.id ? B.id : A.id; s.finished = true; finalizeSeasonAwards(); }
+
+  s.nextIndex++;
+  const comm = document.getElementById('lmCommentary');
+  if (comm) {
+    comm.innerHTML = `<div class="msg" style="border-left-color:#10b981">🏆 <b>FULL TIME:</b> <b>${winner.id}</b> won by <b>${margin}</b>! POTM: <b>${potm}</b>. ${injNote}</div>` + comm.innerHTML;
+  }
+  sfxCrowdRoar(1.3);
+  fireConfetti(winner.color || '#facc15');
+  renderSeason();
+  renderSquads();
+  saveState();
+}
