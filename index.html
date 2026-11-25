@@ -169,7 +169,6 @@
               <button class="btn btn-sm btn-gold" style="padding:3px 8px;font-size:10px" id="btnAiAuctPause" onclick="toggleAIAuctioneerPause()">▶ Start Floor</button>
               <button class="btn btn-sm" style="padding:3px 8px;font-size:10px" id="btnAiAuctSpeed" onclick="toggleAIAuctioneerSpeed()">⚡ Speed: 1x</button>
               <button class="btn btn-sm" style="padding:3px 8px;font-size:10px" id="btnAiAuctAccel" onclick="toggleAccelerator()">⏩ Accel: OFF</button>
-              <button class="btn btn-sm btn-blue" style="padding:3px 8px;font-size:10px" onclick="gmSkipToNextStar()" title="Fast-forward directly to your next Wishlist or Tier S/A star">⭐ Next Star</button>
               <button class="btn btn-sm btn-muted" style="padding:3px 8px;font-size:10px" onclick="gmSkipCurrentSet()" title="Skip current set & let AI draft for you">⏭️ Skip Set</button>
               <button class="btn btn-sm btn-purple" style="padding:3px 8px;font-size:10px" onclick="gmAutoBuildRestAuction()" title="Skip entire auction & let AI build your team">⚡ Auto-Build Team</button>
             </div>
@@ -325,6 +324,7 @@
         </div>
         <div class="huddle-timer" id="huddleTimer">02:00</div>
       </div>
+      <div class="huddle-stage" id="huddleTableStage"></div>
       <div class="huddle-feed" id="huddleFeed"></div>
       <div class="btn-row" style="margin-top:0">
         <button class="btn btn-gold btn-sm" onclick="finishHuddleNow()">⏩ Finish Huddle &amp; Resume</button>
@@ -370,7 +370,6 @@
         <button class="chip" onclick="setMasterFilter('Batters',this)">🏏 Batters &amp; WK</button>
         <button class="chip" onclick="setMasterFilter('All-Rounders',this)">⚡ All-Rounders</button>
         <button class="chip" onclick="setMasterFilter('Bowlers',this)">🎯 Bowlers</button>
-        <button class="chip" onclick="setMasterFilter('WISHLIST',this)">⭐ Wishlist</button>
       </div>
       <div style="display:grid;grid-template-columns:1fr auto;gap:8px;margin-bottom:10px">
         <input type="text" id="poolSearch" class="input-box" placeholder="Search player, set (BA1, FA2, UAL1)..." oninput="renderPool()" />

@@ -202,10 +202,9 @@ function renderPool(){
     return `
     <div class="pool-row ${p.status!=='AVAIL'?'sold':''}">
       <div style="display:flex;align-items:center;gap:8px;min-width:0;flex:1">
-        <button class="avatar-box ${isWish?'wish-on':''}" onclick="toggleWishlist(${p.id})" title="Tap to Toggle Target Wishlist">
+        <div class="avatar-box" style="cursor:default">
           ${getPlayerCartoonAvatar(p, 40)}
-          <span class="avatar-star-badge">${isWish?'★':'☆'}</span>
-        </button>
+        </div>
         <div class="p-info">
           <div class="p-name">${p.name} <span style="font-size:10px;color:var(--gold)">OVR ${p.ovr} • T${p.tier}</span></div>
           <div class="p-sub">${p.phase||roleLabel(p.role)} • ${p.role==='BW'?`BOWL ${p.bowl||p.ovr} • ECON ${p.econ||'8.0'}`:p.role==='AR'?`BAT ${p.bat||p.ovr} / BOWL ${p.bowl||p.ovr} • SR ${p.sr||135}`:`BAT ${p.bat||p.ovr} • SR ${p.sr||135}`} • ${p.os?'OS':'IND'} • ${fmtCr(p.base)}</div>

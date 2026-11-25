@@ -159,6 +159,53 @@ function evaluatePlayerForTeam(team, p, stretch=1.0){
 
 // ==================== 5. TEAM STAFF HUDDLE (2-MIN TACTICAL TIMEOUT) ====================
 let huddleResumeAIAuct = false;
+
+function renderHuddleTableSVG(team, activeSpeakerIdx=-1){
+  const stage = document.getElementById('huddleTableStage');
+  if (!stage || !team) return;
+  const col = team.color || '#facc15';
+  const names = (team.staff || ['Head Coach','Bowling Coach','Owner']).map(s => s.split(' (')[0].split(' ').slice(-1)[0]);
+  const roles = ['COACH', 'ANALYST', 'OWNER'];
+  const xs = [72, 160, 248];
+  const skins = ['#d89b6c', '#e8b48c', '#c68652'];
+  const peopleSvg = xs.map((cx, i) => {
+    const isSpk = i === activeSpeakerIdx;
+    return `
+      <g class="hud-person ${isSpk ? 'speaking' : ''}" transform="translate(${cx}, 0)">
+        <!-- Speaking sound waves -->
+        <path class="hud-wave" d="M 16 18 Q 23 24 16 30" fill="none" stroke="${col}" stroke-width="2" stroke-linecap="round"/>
+        <path class="hud-wave" d="M 21 14 Q 30 24 21 34" fill="none" stroke="#facc15" stroke-width="1.6" stroke-linecap="round"/>
+        <!-- Head -->
+        <circle cx="0" cy="24" r="11" fill="${skins[i]}" stroke="#0f172a" stroke-width="1.8"/>
+        <path d="M -11 22 C -11 10 11 10 11 22 C 8 16 -8 16 -11 22 Z" fill="#1e293b"/>
+        <circle cx="-3.5" cy="24" r="1.3" fill="#0f172a"/>
+        <circle cx="3.5" cy="24" r="1.3" fill="#0f172a"/>
+        ${isSpk ? `<ellipse cx="0" cy="29.5" rx="3" ry="2" fill="#0f172a"/>` : `<path d="M -3 29 Q 0 31 3 29" fill="none" stroke="#0f172a" stroke-width="1.3" stroke-linecap="round"/>`}
+        <!-- Matching Team-Color Jersey / Shirt -->
+        <path d="M -22 64 C -22 44 -14 38 0 38 C 14 38 22 44 22 64 Z" fill="${col}" stroke="#0f172a" stroke-width="2"/>
+        <path d="M -6 38 L 0 46 L 6 38" fill="none" stroke="#0f172a" stroke-width="1.6"/>
+        <text x="0" y="55" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="7.5" font-weight="800" fill="#060a14">${team.id}</text>
+        <!-- Name tag -->
+        <text x="0" y="96" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="7.5" font-weight="700" fill="${isSpk ? '#facc15' : '#94a3b8'}">${names[i] || roles[i]}</text>
+      </g>`;
+  }).join('');
+
+  stage.innerHTML = `
+    <svg viewBox="0 0 320 104" xmlns="http://www.w3.org/2000/svg">
+      <!-- Spotlight glow behind table -->
+      <ellipse cx="160" cy="40" rx="135" ry="34" fill="${col}" opacity="0.14"/>
+      ${peopleSvg}
+      <!-- IPL Franchise Auction Table -->
+      <rect x="20" y="62" width="280" height="22" rx="4" fill="#0f172a" stroke="${col}" stroke-width="2"/>
+      <rect x="20" y="62" width="280" height="5" fill="${col}" opacity="0.85"/>
+      <!-- Laptops & Paddle on table -->
+      <polygon points="56,62 64,53 84,53 80,62" fill="#334155" stroke="#94a3b8" stroke-width="1"/>
+      <polygon points="236,62 240,53 260,53 268,62" fill="#334155" stroke="#94a3b8" stroke-width="1"/>
+      <rect x="122" y="69" width="76" height="12" rx="2" fill="${col}"/>
+      <text x="160" y="78" text-anchor="middle" font-family="Chakra Petch, sans-serif" font-size="9" font-weight="800" fill="#060a14">${team.id} TABLE</text>
+    </svg>`;
+}
+
 async function startTeamHuddle(team, p, nextBid, resumeAutoAfter=false){
   stopAutoBid();
   if (typeof aiAuctPaused !== 'undefined' && state.humanTeamId && !aiAuctPaused) {
@@ -181,6 +228,7 @@ async function startTeamHuddle(team, p, nextBid, resumeAutoAfter=false){
 
   const box = document.getElementById('huddleBox');
   box.classList.add('open');
+  renderHuddleTableSVG(team, -1);
   document.getElementById('huddleTitle').innerHTML = `🧠 <span style="color:${team.color}">${team.id}</span> WAR-ROOM HUDDLE — 2:00 TIMEOUT`;
   document.getElementById('huddleSub').textContent = `Debating ${p.name} at ${fmtCr(nextBid)} • Remaining Purse: ${fmtCr(team.purse)}`;
   const feed = document.getElementById('huddleFeed');
@@ -246,6 +294,7 @@ Return ONLY valid JSON: {"lines": ["<b>Coach:</b> ...", "<b>Specialist:</b> ..."
     for (let idx = 0; idx < lines.length; idx++) {
       if (myHuddleToken !== speechQueueToken) break;
       const txt = lines[idx];
+      renderHuddleTableSVG(team, idx < 3 ? idx : -1);
       feed.innerHTML += `<div class="h-line" style="border-left-color:${team.color}">${txt}</div>`;
       feed.scrollTop = feed.scrollHeight;
       beep(480 + idx * 60, 0.06, 'sine', 0.06);
@@ -345,11 +394,7 @@ function callPlayerById(id){
 
   addReaction(`🏏 <b>${p.name}</b> (${p.set} • Tier ${p.tier} • Est. ${fmtCr(p.fairVal)}) walks onto the podium!`, '#f5c542');
   speakFemale(`Next player, ${p.name}, ${roleLabel(p.role)}, base price ${fmtSpeechPrice(p.base)}.`);
-  if (state.wishlist && state.wishlist.includes(id)) {
-    sfxHijack();
-    showToast(`⭐ WISHLIST TARGET ON PODIUM: ${p.name}!`);
-    addReaction(`⭐ <b>WISHLIST ALERT:</b> Your target <b>${p.name}</b> is now live on the podium!`, '#facc15');
-  }
+
   switchView('stage');
   renderAll();
   saveState();
@@ -2775,26 +2820,23 @@ async function startAIAuctioneerLoop(){
     if (token !== aiAuctLoopToken || aiAuctPaused) break;
 
     if (aiBidPlaced) {
-      // If human hasn't passed, give a crisp countdown window (immediately breaks the instant user clicks Bid or Pass!)
-      const stillCanBid = !(state.passedTeams || []).includes(myId) && state.curLeader !== myId && state.curBid < MAX_BID_CAP;
+      // NO-TIMER GM DECISION: Wait patiently until YOU click Bid or Pass (zero rushed 2s countdown!)
+      const stillCanBid = myTeam && !(state.passedTeams || []).includes(myId) && state.curLeader !== myId &&
+        myTeam.squad.length < 25 && (!p.os || teamRoleCounts(myTeam).OS < 8) &&
+        state.curBid < MAX_BID_CAP && maxSpendable(myTeam) >= (state.curBid + nextInc(state.curBid));
       if (stillCanBid) {
-        const waitMsTotal = (aiAuctSpeedLevel===3 || acceleratorMode) ? 1400 : (aiAuctSpeedLevel===2 ? 2000 : 2800);
-        const stepMs = 45;
-        let elapsed = 0;
         const prevLeader = state.curLeader;
         const prevBid = state.curBid;
-        while (elapsed < waitMsTotal) {
-          if (token !== aiAuctLoopToken || aiAuctPaused) break;
+        setAIAuctioneerStatus(`✋ <b>${prevLeader}</b> leads at <b>${fmtCr(prevBid)}</b> — Take your time (${myId}): tap <b>BID</b> or <b>PASS</b>.`);
+        while (token === aiAuctLoopToken && !aiAuctPaused) {
           if (state.curLeader === myId || state.curBid !== prevBid || (state.passedTeams || []).includes(myId)) break;
-          const remS = Math.ceil((waitMsTotal - elapsed) / 1000);
-          setAIAuctioneerStatus(`✋ <b>${prevLeader}</b> leads at <b>${fmtCr(prevBid)}</b> — Your turn (${myId}): <b>${remS}s</b> to Bid or Pass!`);
-          if (!(await waitAuctioneerMs(stepMs, token))) break;
-          elapsed += stepMs;
+          if (humanProxyCapLakhs > 0 && (state.curBid + nextInc(state.curBid)) <= humanProxyCapLakhs) break;
+          if (!(await waitAuctioneerMs(80, token))) break;
         }
         if (token !== aiAuctLoopToken || aiAuctPaused) break;
         // If YOU just placed a bid, pause briefly so the announcer speaks your bid cleanly before rivals counter!
         if (state.curLeader === myId) {
-          if (!(await waitAuctioneerMs(voiceOn && !acceleratorMode ? 750 : 280, token))) break;
+          if (!(await waitAuctioneerMs(voiceOn && !acceleratorMode ? 800 : 280, token))) break;
         }
       } else {
         // User already passed — zip through AI-vs-AI war fast!
@@ -2813,14 +2855,10 @@ async function startAIAuctioneerLoop(){
     // 5. Nobody has bid yet -> brief chance for human GM to open at base price, else UNSOLD
     if (!state.curLeader) {
       if (humanCanBid) {
-        const waitMsTotal = fast ? 1800 : 3000;
-        let elapsed = 0;
-        while (elapsed < waitMsTotal) {
-          if (token !== aiAuctLoopToken || aiAuctPaused) break;
+        setAIAuctioneerStatus(`🎙️ No rival takers at ${fmtCr(p.base)} — <b>${myId}</b> can open the bid or tap <b>PASS</b>.`);
+        while (token === aiAuctLoopToken && !aiAuctPaused) {
           if (state.curLeader === myId || (state.passedTeams || []).includes(myId)) break;
-          setAIAuctioneerStatus(`🎙️ No rival takers at ${fmtCr(p.base)} — <b>${myId}</b> has <b>${Math.ceil((waitMsTotal-elapsed)/1000)}s</b> to open!`);
-          if (!(await waitAuctioneerMs(150, token))) break;
-          elapsed += 150;
+          if (!(await waitAuctioneerMs(80, token))) break;
         }
         if (token !== aiAuctLoopToken || aiAuctPaused) break;
         if (state.curLeader) continue;
@@ -2881,44 +2919,3 @@ function gmAutoBuildRestAuction(){
 }
 
 
-function gmSkipToNextStar(){
-  stopAIAuctioneer();
-  stopAutoBid();
-  closeHuddle();
-  const wish = new Set(state.wishlist || []);
-  let skipped = 0;
-  let targetId = null;
-
-  for (const p of state.players) {
-    if (p.status !== 'AVAIL') continue;
-    if (state.curId === p.id) {
-      // Skip current player if it's not a star/wishlist
-      if (wish.has(p.id) || p.tier === 'S' || p.tier === 'A') {
-        targetId = p.id;
-        break;
-      }
-      simSinglePlayerSilent(p);
-      state.curId = null; state.curLeader = null; state.curBid = 0; state.gavelStage = 0;
-      skipped++;
-      continue;
-    }
-    if (wish.has(p.id) || p.tier === 'S' || p.tier === 'A') {
-      targetId = p.id;
-      break;
-    }
-    simSinglePlayerSilent(p);
-    skipped++;
-  }
-
-  checkTradeUnlock();
-  if (targetId !== null) {
-    showToast(`⭐ Skipped ${skipped} lower-tier lots → Jumped straight to ${state.players[targetId].name}!`);
-    callPlayerById(targetId);
-    if (state.humanTeamId) {
-      setAIAuctioneerStatus(`⭐ Fast-forwarded ${skipped} lots to <b>${state.players[targetId].name}</b>! Tap <b>▶ Resume</b> to bid.`);
-    }
-  } else {
-    showToast(`All remaining Tier S/A & Wishlist stars are done! (${skipped} lots simulated)`);
-    renderAll(); saveState();
-  }
-}
