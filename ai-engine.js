@@ -1423,6 +1423,9 @@ function checkTradeUnlock(){
     sfxTrade();
     pushTicker('🔄 MARQUEE COMPLETE! ALL-10-TEAM LIVE AI TRADE WINDOW IS NOW OPEN!');
     showToast('🔄 Marquee Set Complete! Trade Window Unlocked!');
+    if (state.humanTeamId && typeof generateIncomingAITradeOffers === 'function') {
+      setTimeout(() => generateIncomingAITradeOffers(true), 600);
+    }
   }
 }
 
@@ -2040,56 +2043,85 @@ async function sendTradeWindowChat(preset){
 
   const targets = targetVal === 'ALL' ? state.teams : [state.teams.find(x => x.id === targetVal)].filter(Boolean);
   const propSummary = state.tradeProposals.length
-    ? state.tradeProposals.map(tr => `${tr.teamA} sends ${state.players[tr.playerA]?.name} <-> ${tr.teamB} sends ${tr.playerB!==null?state.players[tr.playerB]?.name:'Cash'}`).join('; ')
-    : 'No active pending proposals yet (user may be discussing general trades).';
+    ? state.tradeProposals.map(tr => `ID:${tr.id} | ${tr.teamA} sends ${state.players[tr.playerA]?.name} <-> ${tr.teamB} sends ${tr.playerB!==null?state.players[tr.playerB]?.name:'Cash'}`).join('\n')
+    : 'No active pending proposals.';
 
   let aiReplies = null;
   if (getSavedApiKey()) {
     const wId = 'tw-' + Date.now();
-    feed.innerHTML += `<div class="msg" id="${wId}" style="opacity:0.7">🤖 Franchise GMs replying in Trade War-Room...</div>`;
+    feed.innerHTML += `<div class="msg" id="${wId}" style="opacity:0.7">🤖 Franchise GMs evaluating your advice &amp; live trade proposals...</div>`;
     feed.scrollTop = feed.scrollHeight;
     const teamCtx = targets.map(t => {
       const c = teamRoleCounts(t);
       return `${t.id} (GM/Coach: ${t.staff[0]}, Purse: ${fmtCr(t.purse)}, Sq: ${t.squad.length}/25, Bat:${c.B}, WK:${c.WK}, AR:${c.AR}, Bowl:${c.BW}, Spin:${c.spinners})`;
     }).join('\n');
-    const prompt = `IPL Mega Auction Trade Window Chat!
-Active Trade Proposals on table: ${propSummary}
+    const prompt = `IPL Mega Auction AGENTIC Trade War-Room!
+Active Pending Trade Proposals:
+${propSummary}
+
 Franchises replying:
 ${teamCtx}
-The Commissioner/User just told them: "${txt}"
-For each franchise, reply in 1 sharp, natural sentence (max 22 words) reacting to whether it's a good trade, bad trade, or answering their trade question.
-Return ONLY valid JSON: {"CSK": "...", ...}`;
-    aiReplies = await callGeminiJSON(prompt, 0.85);
+
+The User/Advisor just told them: "${txt}"
+
+IMPORTANT — REAL AUTONOMOUS ACTIONS:
+If the user convinces a franchise that their pending trade is BAD / unfair / a mistake, that GM MUST change their mind and set "action": "WITHDRAW" (this automatically cancels the proposal!).
+If the user confirms a pending trade is GOOD / smart / says "do it / go ahead / approve", that GM can set "action": "EXECUTE" (this automatically completes the trade!).
+Otherwise set "action": "NONE".
+Return ONLY valid JSON: {"CSK": {"reply": "1 sharp sentence (max 22 words)", "action": "WITHDRAW"|"EXECUTE"|"NONE"}, ...}`;
+    aiReplies = normalizeTeamMap(await callGeminiJSON(prompt, 0.78));
     const wEl = document.getElementById(wId);
     if (wEl) wEl.remove();
   }
 
   const ql = txt.toLowerCase();
-  targets.forEach((t, idx) => {
-    let reply = aiReplies && aiReplies[t.id] ? aiReplies[t.id] : '';
+  const wantsCancel = /(bad trade|robbed|terrible|lopsided|don'?t do|cancel|withdraw|rethink|worst|mistake|pull out|reject|no deal|stop)/i.test(ql);
+  const wantsApprove = /(good trade|great trade|smart|fair|do it|go ahead|approve|seal|accept|love this|confirm)/i.test(ql);
+  let stateChanged = false;
+
+  for (let idx = 0; idx < targets.length; idx++) {
+    const t = targets[idx];
+    const teamProp = state.tradeProposals.find(tr => tr.teamA === t.id || tr.teamB === t.id);
+    let reply = '', action = 'NONE';
+
+    if (aiReplies && aiReplies[t.id]) {
+      const entry = aiReplies[t.id];
+      reply = typeof entry === 'string' ? entry : (entry.reply || entry.text || '');
+      action = typeof entry === 'object' && entry.action ? String(entry.action).toUpperCase() : 'NONE';
+    }
     if (!reply) {
       const c = teamRoleCounts(t);
-      if (/(bad trade|robbed|terrible|lopsided|don'?t do|rethink|worst)/i.test(ql)) {
-        const lines = [
-          `Fair warning! ${t.staff[0].split(' (')[0]} is double-checking the numbers — we won't let anyone fleece ${t.id}!`,
-          `Hear you loud and clear — if the value isn't equal, we're pulling our offer off the table.`,
-          `Appreciate the heads-up! We'll demand a cash sweetener or a better player before signing.`
-        ];
-        reply = lines[idx % lines.length];
-      } else if (/(good trade|great trade|smart|fair|love|nice deal)/i.test(ql)) {
-        const lines = [
-          `Glad you see it too! Filling our roster gap while keeping ${fmtCr(t.purse)} intact is smart business.`,
-          `Win-win deal! Both squads get stronger for the 74-match grind.`,
-          `Exactly — ${t.id} needed that balance for ${t.home}. Ready to sign off!`
-        ];
-        reply = lines[idx % lines.length];
+      if (wantsCancel && teamProp) {
+        action = 'WITHDRAW';
+        reply = `You're right — ${t.staff[0].split(' (')[0]} agrees we're losing value here. Pulling our ${teamProp.teamA}⇄${teamProp.teamB} trade off the table right now!`;
+      } else if (wantsApprove && teamProp) {
+        action = 'EXECUTE';
+        reply = `Agreed! That trade strengthens our ${t.home.split(' (')[0]} balance — sealing the ${teamProp.teamA}⇄${teamProp.teamB} deal immediately!`;
       } else {
-        reply = `At ${t.id} (${t.squad.length}/25, ${fmtCr(t.purse)} left), we're open to fair 1-for-1 swaps—especially if it upgrades our ${c.WK<2?'WK':c.spinners<2?'Spin':c.BW<7?'Bowling':'Batting'} depth.`;
+        reply = `At ${t.id} (${t.squad.length}/25, ${fmtCr(t.purse)} left), we're open to fair 1-for-1 swaps to upgrade our ${c.WK<2?'WK':c.spinners<2?'Spin':c.BW<7?'Bowling':'Batting'} depth.`;
       }
     }
-    feed.innerHTML += `<div class="msg" style="border-left-color:${t.color}"><b style="color:${t.color}">${t.id} GM:</b> ${reply}</div>`;
-  });
+
+    // Execute real autonomous GM decision on pending trade proposals!
+    let actionBadge = '';
+    if (teamProp && (action === 'WITHDRAW' || (action === 'NONE' && wantsCancel && /(pulling|cancel|withdraw|off the table|rethink|calling it off)/i.test(reply)))) {
+      state.tradeProposals = state.tradeProposals.filter(x => x.id !== teamProp.id);
+      const cancelNote = `🚫 AI GM CHANGED MIND: ${t.id} withdrew the ${teamProp.teamA} ⇄ ${teamProp.teamB} trade proposal after your feedback!`;
+      pushTicker(cancelNote);
+      actionBadge = ` <span class="pill pill-danger" style="font-size:9px;padding:2px 6px;margin-left:4px">⚡ TRADE WITHDRAWN</span>`;
+      sfxUnsold();
+      stateChanged = true;
+    } else if (teamProp && (action === 'EXECUTE' || (action === 'NONE' && wantsApprove && /(sealing|signing off|locking|executing|done deal)/i.test(reply)))) {
+      approveTrade(teamProp.id);
+      actionBadge = ` <span class="pill pill-live" style="font-size:9px;padding:2px 6px;margin-left:4px">⚡ TRADE EXECUTED</span>`;
+      stateChanged = true;
+    }
+
+    feed.innerHTML += `<div class="msg" style="border-left-color:${t.color}"><b style="color:${t.color}">${t.id} GM:</b> ${reply}${actionBadge}</div>`;
+  }
+
   feed.scrollTop = feed.scrollHeight;
+  if (stateChanged) { renderTrades(); renderSquads(); saveState(); }
   beep(560, 0.06, 'sine', 0.08);
   if (voiceOn) {
     const nodes = Array.from(feed.querySelectorAll('.msg')).slice(-targets.length);
@@ -2117,56 +2149,89 @@ async function sendXICoachChat(preset){
   feed.innerHTML += `<div class="msg user"><b>You (To ${labelTo}):</b> ${txt}</div>`;
   feed.scrollTop = feed.scrollHeight;
 
+  const ql = txt.toLowerCase();
+  const wantsRebuild = /(not good|bad|wrong|fix|change|rebuild|reorder|position|batting order|spinner|opener|finisher|play .* instead|drop |replace |swap |adjust|improve|balance|weak)/i.test(ql);
+
   let aiReplies = null;
   if (getSavedApiKey()) {
     const wId = 'xic-' + Date.now();
-    feed.innerHTML += `<div class="msg" id="${wId}" style="opacity:0.7">🧠 Head Coach analysing Playing XI suggestion via Gemini AI...</div>`;
+    feed.innerHTML += `<div class="msg" id="${wId}" style="opacity:0.7">🧠 Head Coach reviewing your tactical suggestion &amp; updating Playing XII if convinced...</div>`;
     feed.scrollTop = feed.scrollHeight;
 
     const ctx = targets.map(t => {
       const { xi, impact } = computePlayingXII(t);
-      const bench = t.squad.map(id=>state.players[id]).filter(p => p && !xi.some(x=>x.id===p.id)).slice(0,6).map(p=>`${p.name}(${p.role}${p.os?',OS':''})`).join(', ');
-      return `${t.id} (Coach: ${t.staff[0]}, Home: ${t.home}): XI=[${xi.map(p=>`${p.name}(${p.role}${p.os?',OS':''})`).join(', ')}], Impact=${impact?impact.name:'None'}, Bench=[${bench}]`;
+      const fullSq = t.squad.map(id => {
+        const p = state.players[id];
+        return p ? `${p.id}:${p.name}(${p.role}${isSpinner(p)?',Spin':''}${p.os?',OS':''},OVR:${p.ovr})` : '';
+      }).filter(Boolean).join(', ');
+      return `${t.id} (Coach: ${t.staff[0]}, Home: ${t.home}): CurrentXI=[${xi.map(p=>`${p.id}:${p.name}(${p.role})`).join(', ')}], Impact=${impact?impact.id+':'+impact.name:'None'} | FullSquad=[${fullSq}]`;
     }).join('\n');
 
-    const prompt = `You are the Head Coach(es) in an IPL Mega Auction app.
+    const prompt = `You are the AGENTIC Head Coach(es) in an IPL Mega Auction app.
 Team(s) & Current Playing XII:
 ${ctx}
-The Manager/User just gave this Playing XI suggestion or question: "${txt}"
+The Manager/User just told you: "${txt}"
 
-For each team, respond honestly in 1-2 crisp sentences (max 32 words):
-- Explicitly start with "✅ GOOD IDEA:" or "❌ BAD IDEA:" or "⚖️ MIXED IDEA:" when evaluating a suggestion!
-- Ground your answer in their actual players, overseas 4-player cap, bowling depth, and home pitch (${targets.length===1 ? targets[0].home : 'each home pitch'}).
-Return ONLY valid JSON: {"CSK": "✅ GOOD IDEA: ...", ...}`;
-    aiReplies = await callGeminiJSON(prompt, 0.75);
+CRITICAL — AUTONOMOUS PLAYING XII REBUILD:
+For each team, respond honestly in 1-2 crisp sentences (max 32 words) starting with "✅ GOOD IDEA:" or "❌ BAD IDEA:" or "⚖️ MIXED IDEA:".
+If you AGREE with the user (or they point out bad batting positions / missing spinner / better player on bench), you MUST set "rebuild": true and provide the NEW "xi" (array of 11 valid player IDs from their FullSquad in proper batting order #1-#11, max 4 OS) and "impact" (1 valid bench player ID, Indian if 4 OS in XI)!
+If you disagree or no change is needed, set "rebuild": false.
+Return ONLY valid JSON: {"CSK": {"reply": "✅ GOOD IDEA: ...", "rebuild": true, "xi": [11 ids], "impact": id}, ...}`;
+    aiReplies = normalizeTeamMap(await callGeminiJSON(prompt, 0.55, 8000));
     const wEl = document.getElementById(wId);
     if (wEl) wEl.remove();
   }
 
-  const ql = txt.toLowerCase();
-  targets.forEach(t => {
+  let anyRebuilt = false;
+  for (const t of targets) {
     const coachName = t.staff[0].split(' (')[0];
-    let reply = aiReplies && aiReplies[t.id] ? aiReplies[t.id] : '';
+    let reply = '', didRebuild = false;
+
+    if (aiReplies && aiReplies[t.id]) {
+      const entry = aiReplies[t.id];
+      reply = typeof entry === 'string' ? entry : (entry.reply || entry.text || '');
+      if (typeof entry === 'object' && entry.rebuild && Array.isArray(entry.xi) && t.squad.length >= 11) {
+        validateAndApplyGeminiXI(t, { xi: entry.xi, impact: entry.impact, note: `Rebuilt by ${coachName} after your tactical feedback.` }, t.home);
+        didRebuild = true;
+        anyRebuilt = true;
+      }
+    }
+
+    // Smart Offline / Fallback Autonomous Rebuild when user asks to fix positions, add spinner, or rebuild XI!
+    if (!didRebuild && wantsRebuild && t.squad.length >= 11 && (!aiReplies || !aiReplies[t.id] || /good idea|you'?re right|agreed|rebuilding|adjusting/i.test(reply))) {
+      const forceSpin = /spinner|spin/i.test(ql);
+      const pitchHint = forceSpin ? 'Chepauk spin-friendly' : t.home;
+      t.customXI = null; // clear old XI so computePlayingXII rebuilds fresh
+      const rebuilt = computePlayingXII(t, pitchHint);
+      t.customXI = autoSortBattingOrder(rebuilt.xi.map(p => p.id));
+      const imp = sanitizeImpactForXI(t, t.customXI, rebuilt.impact ? rebuilt.impact.id : null, pitchHint);
+      t.customImpact = imp ? imp.id : null;
+      t.xiSource = 'GEMINI';
+      t.xiNote = `Rebuilt batting order & roles by ${coachName} based on your feedback.`;
+      didRebuild = true;
+      anyRebuilt = true;
+      if (!reply) {
+        reply = `✅ GOOD IDEA: You're right about the balance & batting order — I've automatically rebuilt ${t.id}'s Playing XII${forceSpin ? ' with extra spin control' : ''} right now!`;
+      }
+    }
+
     if (!reply) {
       const { xi, impact } = computePlayingXII(t);
       const bowlers = xi.filter(p => p.role==='BW'||p.role==='AR').length;
-      const spinners = xi.filter(p => isSpinner(p)).length;
-      if (/spinner|spin/i.test(ql)) {
-        const goodSpin = t.home.toLowerCase().includes('chepauk') || t.home.toLowerCase().includes('ekana') || spinners < 2;
-        reply = goodSpin
-          ? `✅ GOOD IDEA: At ${t.home}, adding an extra spinner (currently ${spinners} in XI) gives us crucial middle-overs control!`
-          : `❌ BAD IDEA: We already have ${spinners} spin options and ${t.home} favours pace—extra spin could get targeted.`;
-      } else if (/impact|sub/i.test(ql)) {
-        reply = `⚡ Currently ${impact ? impact.name : 'our top bench pick'} is our Impact Sub—we can bring them in as a specialist batter while chasing or extra bowler defending!`;
-      } else if (/weak|flaw|problem/i.test(ql)) {
-        reply = `🔍 Honest check: ${bowlers < 5 ? 'We are short on a 5th bowler in the XI!' : 'Our core XI is solid, just need our finishers to fire under pressure at ' + t.home + '.'}`;
-      } else {
-        reply = `⚖️ MIXED IDEA: Interesting thought for ${t.home}! Tap "✏️ Edit Manually" above if you want to test that swap in our Playing XII (we have ${bowlers} bowling options right now).`;
-      }
+      reply = `⚖️ MIXED IDEA: Our current XI has ${bowlers} bowling options with ${impact ? impact.name : 'our top bench pick'} as Impact Sub. Tell me if you want me to rebuild the batting order or add a spinner!`;
     }
-    feed.innerHTML += `<div class="msg" style="border-left-color:${t.color}"><b style="color:${t.color}">${t.id} (${coachName}):</b> ${reply}</div>`;
-  });
+
+    const actBadge = didRebuild ? ` <span class="pill pill-live" style="font-size:9px;padding:2px 6px;margin-left:4px">⚡ PLAYING XII REBUILT</span>` : '';
+    feed.innerHTML += `<div class="msg" style="border-left-color:${t.color}"><b style="color:${t.color}">${t.id} (${coachName}):</b> ${reply}${actBadge}</div>`;
+  }
+
   feed.scrollTop = feed.scrollHeight;
+  if (anyRebuilt) {
+    sfxTrade();
+    showToast('⚡ AI Head Coach automatically rebuilt Playing XII!');
+    renderSquads();
+    saveState();
+  }
   beep(580, 0.06, 'sine', 0.08);
   if (voiceOn) {
     const nodes = Array.from(feed.querySelectorAll('.msg')).slice(-targets.length);
