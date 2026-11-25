@@ -986,18 +986,7 @@
   .rival-slot.lead {
     border-color: var(--gold); background: var(--gold-dim);
   }
-  .bid-graph-box {
-    margin: 6px 0 8px; padding: 6px 8px;
-    background: var(--input-bg); border: 1px solid var(--card-border);
-    border-radius: 5px; display: none;
-  }
-  .bid-graph-box.show { display: block; }
-  .bid-graph-head {
-    display: flex; justify-content: space-between; align-items: center;
-    font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; color: var(--muted);
-    margin-bottom: 3px;
-  }
-  .director-deck-label {
+    .director-deck-label {
     font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; font-weight: 700;
     letter-spacing: 1px; color: var(--accent); text-align: center;
     margin: 8px 0 4px; text-transform: uppercase;

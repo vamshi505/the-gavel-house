@@ -601,9 +601,14 @@ function hammerSold(){
 
   sfxGavel();
   setTimeout(()=>sfxCrowdRoar(1.3), 160);
-  speakMale(`Sold! ${p.name} goes to ${winTeam.name} for ${fmtSpeechPrice(price)}!`);
-  pushTicker(`🔨 SOLD: ${p.name} → ${winTeam.id} for ${fmtCr(price)}`);
-  showSoldStamp(p.name, winTeam.name, fmtCr(price), winTeam.id);
+  const verdictInfo = (price <= p.fairVal * 0.82 && p.tier !== 'C')
+    ? { text: '💎 STEAL BUY', color: '#34d399' }
+    : (price >= p.fairVal * 1.20 && price >= 800)
+      ? { text: '🔥 MARQUEE OVERPAY', color: '#fb923c' }
+      : { text: '✅ FAIR VALUE SIGNING', color: '#38bdf8' };
+  window._lastGavelSpeech = speakMale(`Sold! ${p.name} goes to ${winTeam.name} for ${fmtSpeechPrice(price)}!`);
+  pushTicker(`🔨 SOLD: ${p.name} → ${winTeam.id} for ${fmtCr(price)} (${verdictInfo.text})`);
+  showSoldStamp(p.name, winTeam.name, fmtCr(price), winTeam.id, verdictInfo);
 
   stopBidTimer();
   state.curId = null; state.curLeader = null; state.curBid = 0; state.gavelStage = 0; state.biddersThisLot = []; state.bidHistory = []; state.passedTeams = [];
@@ -618,7 +623,7 @@ function hammerUnsold(){
   const p = state.players[state.curId];
   p.status = 'UNSOLD';
   sfxUnsold();
-  speakMale(`${p.name} goes unsold.`);
+  window._lastGavelSpeech = speakMale(`${p.name} goes unsold.`);
   addReaction(`✕ <b>UNSOLD:</b> All 10 franchises passed on ${p.name} at ${fmtCr(p.base)}.`, '#ef4444');
   pushTicker(`✕ UNSOLD: ${p.name} (${fmtCr(p.base)})`);
   showToast(`${p.name} goes UNSOLD.`);
@@ -640,13 +645,18 @@ function startAcceleratedRound(){
   renderAll(); saveState();
 }
 
-function showSoldStamp(name, teamName, price, teamId=''){
+function showSoldStamp(name, teamName, price, teamId='', verdict=null){
   document.getElementById('stampPlayer').textContent = name.toUpperCase();
   document.getElementById('stampTeam').innerHTML = `${teamId ? getTeamLogo(teamId, 28) + ' ' : ''}TO ${teamName.toUpperCase()}`;
   document.getElementById('stampPrice').textContent = price;
+  const vEl = document.getElementById('stampVerdict');
+  if (vEl) {
+    vEl.textContent = verdict ? verdict.text : '';
+    vEl.style.color = verdict ? verdict.color : '#38bdf8';
+  }
   const ov = document.getElementById('soldOverlay');
   ov.classList.add('show');
-  clearTimeout(ov._tm); ov._tm = setTimeout(()=>ov.classList.remove('show'), 2400);
+  clearTimeout(ov._tm); ov._tm = setTimeout(()=>ov.classList.remove('show'), 3200);
 }
 
 function pushTicker(msg){
@@ -2817,7 +2827,11 @@ async function startAIAuctioneerLoop(){
       }
       setAIAuctioneerStatus(`✕ No takers for <b>${p.name}</b> — calling UNSOLD!`);
       hammerUnsold();
-      if (!(await waitAuctioneerMs(acceleratorMode ? 700 : 1400, token))) break;
+      // Wait for full UNSOLD voice announcement + clean pause before next player
+      if (voiceOn && window._lastGavelSpeech) {
+        await Promise.race([window._lastGavelSpeech, waitAuctioneerMs(3500, token)]);
+      }
+      if (!(await waitAuctioneerMs(850, token))) break;
       continue;
     }
 
@@ -2825,20 +2839,23 @@ async function startAIAuctioneerLoop(){
     if (state.gavelStage === 0) {
       setAIAuctioneerStatus(`🔔 Going Once at <b>${fmtCr(state.curBid)}</b> to <b>${state.curLeader}</b>...`);
       callGoingOnce();
-      if (!(await waitAuctioneerMs(aiAuctSpeedLevel===3 ? 220 : fast ? 380 : 750, token))) break;
+      if (!(await waitAuctioneerMs(voiceOn ? 1150 : (fast ? 420 : 800), token))) break;
       continue;
     }
     if (state.gavelStage === 1) {
       setAIAuctioneerStatus(`🔥 Going Twice at <b>${fmtCr(state.curBid)}</b> to <b>${state.curLeader}</b> — Final Call!`);
       callGoingTwice();
-      if (!(await waitAuctioneerMs(aiAuctSpeedLevel===3 ? 220 : fast ? 380 : 750, token))) break;
+      if (!(await waitAuctioneerMs(voiceOn ? 1250 : (fast ? 450 : 850), token))) break;
       continue;
     }
     if (state.gavelStage >= 2) {
       setAIAuctioneerStatus(`🔨 SOLD! <b>${p.name}</b> goes to <b>${state.curLeader}</b> for <b>${fmtCr(state.curBid)}</b>!`);
       hammerSold();
-      // Wait 2.6s so the SOLD stamp card stays visible and the Male Gavel Voice finishes announcing SOLD!
-      if (!(await waitAuctioneerMs(acceleratorMode ? 1400 : 2600, token))) break;
+      // ALWAYS wait for the full SOLD announcement (player + team + price) so the team name is never cut off!
+      if (voiceOn && window._lastGavelSpeech) {
+        await Promise.race([window._lastGavelSpeech, waitAuctioneerMs(5200, token)]);
+      }
+      if (!(await waitAuctioneerMs(950, token))) break;
       continue;
     }
   }
@@ -2861,4 +2878,47 @@ function gmAutoBuildRestAuction(){
   stopAIAuctioneer();
   quickSimRestAuction();
   setAIAuctioneerStatus('🏁 Auction auto-completed! Your AI Staff built your full squad — head to <b>SQUADS</b> or <b>SEASON</b>!');
+}
+
+
+function gmSkipToNextStar(){
+  stopAIAuctioneer();
+  stopAutoBid();
+  closeHuddle();
+  const wish = new Set(state.wishlist || []);
+  let skipped = 0;
+  let targetId = null;
+
+  for (const p of state.players) {
+    if (p.status !== 'AVAIL') continue;
+    if (state.curId === p.id) {
+      // Skip current player if it's not a star/wishlist
+      if (wish.has(p.id) || p.tier === 'S' || p.tier === 'A') {
+        targetId = p.id;
+        break;
+      }
+      simSinglePlayerSilent(p);
+      state.curId = null; state.curLeader = null; state.curBid = 0; state.gavelStage = 0;
+      skipped++;
+      continue;
+    }
+    if (wish.has(p.id) || p.tier === 'S' || p.tier === 'A') {
+      targetId = p.id;
+      break;
+    }
+    simSinglePlayerSilent(p);
+    skipped++;
+  }
+
+  checkTradeUnlock();
+  if (targetId !== null) {
+    showToast(`⭐ Skipped ${skipped} lower-tier lots → Jumped straight to ${state.players[targetId].name}!`);
+    callPlayerById(targetId);
+    if (state.humanTeamId) {
+      setAIAuctioneerStatus(`⭐ Fast-forwarded ${skipped} lots to <b>${state.players[targetId].name}</b>! Tap <b>▶ Resume</b> to bid.`);
+    }
+  } else {
+    showToast(`All remaining Tier S/A & Wishlist stars are done! (${skipped} lots simulated)`);
+    renderAll(); saveState();
+  }
 }

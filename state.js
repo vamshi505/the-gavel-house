@@ -203,7 +203,7 @@ function speakAsync(text, gender, opts={}){
     if (shouldCancel) {
       try { window.speechSynthesis.cancel(); } catch(e){}
       // 70ms settle delay avoids Chrome/Android race condition that swallows new utterances after cancel()
-      setTimeout(launchUtterance, 70);
+      setTimeout(launchUtterance, 95);
     } else {
       launchUtterance();
     }
@@ -214,7 +214,7 @@ function speakBidFemale(text){
   return speakAsync(text, 'female', { isLiveBid: true, interrupt: true, pitch: 1.16, rate: fastRate });
 }
 function speakFemale(text){ return speakAsync(text, 'female', { isLiveBid: false, interrupt: true, pitch: 1.16, rate: 1.08 }); }
-function speakMale(text){ return speakAsync(text, 'male', { isLiveBid: false, interrupt: true, pitch: 0.62, rate: 0.94 }); }
+function speakMale(text){ return speakAsync(text, 'male', { isLiveBid: false, interrupt: true, pitch: 0.68, rate: 0.96 }); }
 
 async function speakDiscussionQueue(items){
   if (!voiceOn || !items || !items.length) return;

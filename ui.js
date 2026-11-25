@@ -943,9 +943,6 @@ function undoLastSale(){
 // ==================== V32 UPGRADE 1: BROADCAST RIVAL STRIP & LIVE BID-WAR PRICE GRAPH ====================
 function renderBroadcastRivalStripAndGraph(isLive, p){
   const strip = document.getElementById('rivalStrip');
-  const gBox = document.getElementById('bidGraphBox');
-  const gWrap = document.getElementById('bidGraphSvgWrap');
-  const gStats = document.getElementById('bidGraphStats');
 
   if (strip) {
     if (!isLive || !state.bidPoints || state.bidPoints.length <= 1) {
@@ -972,41 +969,6 @@ function renderBroadcastRivalStripAndGraph(isLive, p){
     }
   }
 
-  if (gBox && gWrap) {
-    const pts = (isLive && state.bidPoints && state.bidPoints.length >= 2) ? state.bidPoints : null;
-    if (!pts) {
-      gBox.classList.remove('show');
-    } else {
-      gBox.classList.add('show');
-      const W = 320, H = 56, padX = 12, padY = 8;
-      const minV = pts[0].bid;
-      const maxV = Math.max(minV + 25, ...pts.map(x => x.bid));
-      const coords = pts.map((pt, idx) => {
-        const x = padX + (idx / Math.max(1, pts.length - 1)) * (W - padX * 2);
-        const y = H - padY - ((pt.bid - minV) / Math.max(1, maxV - minV)) * (H - padY * 2);
-        return { x: +x.toFixed(1), y: +y.toFixed(1), color: pt.color, bid: pt.bid };
-      });
-      const polyPts = coords.map(c => `${c.x},${c.y}`).join(' ');
-      const areaPts = `${coords[0].x},${H - padY} ${polyPts} ${coords[coords.length - 1].x},${H - padY}`;
-      const lastC = coords[coords.length - 1];
-      if (gStats) gStats.textContent = `${fmtCr(minV)} → ${fmtCr(lastC.bid)} (${pts.length - 1} bids)`;
-
-      gWrap.innerHTML = `
-        <svg viewBox="0 0 ${W} ${H}" width="100%" height="56" preserveAspectRatio="none" style="display:block">
-          <defs>
-            <linearGradient id="bidGrad" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stop-color="${lastC.color}" stop-opacity="0.38"/>
-              <stop offset="100%" stop-color="${lastC.color}" stop-opacity="0.02"/>
-            </linearGradient>
-          </defs>
-          <line x1="${padX}" y1="${padY}" x2="${W - padX}" y2="${padY}" stroke="rgba(148,163,184,0.18)" stroke-dasharray="3 3"/>
-          <line x1="${padX}" y1="${H - padY}" x2="${W - padX}" y2="${H - padY}" stroke="rgba(148,163,184,0.18)"/>
-          <polygon points="${areaPts}" fill="url(#bidGrad)"/>
-          <polyline points="${polyPts}" fill="none" stroke="${lastC.color}" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>
-          ${coords.map((c, i) => `<circle cx="${c.x}" cy="${c.y}" r="${i === coords.length - 1 ? 4 : 2.2}" fill="${c.color}" stroke="#060a14" stroke-width="1"/>`).join('')}
-        </svg>`;
-    }
-  }
 }
 
 // ==================== V32 UPGRADE 2: CUSTOM PLAYER CREATOR ====================
