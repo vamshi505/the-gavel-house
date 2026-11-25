@@ -443,11 +443,35 @@ function teamCoachEval(t){
   const bestBat = [...batters].sort((a,b)=>b.ovr-a.ovr)[0];
   const bestBowl = [...bowlers].sort((a,b)=>b.ovr-a.ovr)[0];
 
+  const spinnersXI = xi.filter(p => isSpinner(p));
+  const deathXI = xi.filter(p => p.phase === 'Death Pace' || (p.role === 'BW' && (p.econ || 8.5) <= 8.0));
+  const homeS = t.home.split(' (')[0];
+  const isSpinHome = /chepauk|ekana|jaipur/i.test(homeS);
+
+  let strengthTxt = bestBat && bestBowl
+    ? `Explosive core led by ${bestBat.name} & ${bestBowl.name} tailored for ${homeS}.`
+    : 'Balanced roster with solid depth.';
+  if (isSpinHome && spinnersXI.length >= 2) {
+    strengthTxt = `Lethal ${homeS} spin choke led by ${spinnersXI.slice(0,2).map(p=>p.name).join(' & ')} plus ${bestBat?bestBat.name:'batting depth'}.`;
+  } else if (deathXI.length >= 2 && bestBat) {
+    strengthTxt = `Elite death bowling (${deathXI.slice(0,2).map(p=>p.name).join(' & ')}) backing up ${bestBat.name}'s firepower.`;
+  } else if (allRounders.length >= 3 && bestBat) {
+    strengthTxt = `Deep batting till #8 with ${allRounders.length} all-rounders (${allRounders.slice(0,2).map(p=>p.name).join(', ')}) and ${bestBat.name}.`;
+  }
+
+  let weaknessTxt = 'Relies heavily on Impact Sub timing in close chases.';
+  if (c.WK === 0) weaknessTxt = 'No specialist wicketkeeper signed — urgent trade needed.';
+  else if (bowlers.length < 5) weaknessTxt = `Only ${bowlers.length} frontline bowling options — vulnerable if a bowler has an off day.`;
+  else if (isSpinHome && spinnersXI.length < 2) weaknessTxt = `Light on spin (${spinnersXI.length}) for a turning ${homeS} surface.`;
+  else if (deathXI.length === 0) weaknessTxt = 'Lacks a proven specialist death-overs pacer for overs 17-20.';
+  else if (indCoreCount <= 2) weaknessTxt = 'Over-reliant on 4 overseas stars — thin Indian core if injuries hit.';
+  else if (batters.length < 6) weaknessTxt = 'Shallow lower-middle order — top 4 must fire every game.';
+
   return {
     overall, bat:Math.min(9.6,batScore), bowl:Math.min(9.6,bowlScore), ar:Math.min(9.6,arScore), bal:balScore,
     xi, impact, avgOvr,
-    strength: bestBat ? `Led by ${bestBat.name} & ${bestBowl ? bestBowl.name : 'core depth'} for ${t.home}` : 'Balanced roster',
-    weakness: c.WK===0 ? 'Missing specialist keeper' : bowlers.length<5 ? 'Light on 5th bowling option' : 'Needs strong Impact Sub execution'
+    strength: strengthTxt,
+    weakness: weaknessTxt
   };
 }
 
@@ -1008,7 +1032,20 @@ async function runOneSeasonMatch(useGeminiLine=true, tossInfo=null){
   const injury = idx < 73 ? triggerAutoMatchInjury([t1Id, t2Id], label) : null;
   const injNote = injury ? `🚑 Injured: ${injury.out} (${injury.team}, ${injury.reason}) → Replaced by ${injury.inName}` : '✅ No injuries';
 
-  let oneLiner = `${winner.id} beat ${bWins?A.id:B.id} by ${margin} — POTM: ${potm}. ${injNote}`;
+  const loserId = bWins ? A.id : B.id;
+  const venueS = teamAObj.home.split(' (')[0];
+  const offlineLines = superOverData ? [
+    `🔥 SUPER OVER CLASSIC at ${venueS}! ${winner.id} edge out ${loserId} — POTM: ${potm}. ${injNote}`
+  ] : bWins ? [
+    `${winner.id} chase it down at ${venueS} by ${margin}, powered by POTM ${potm}! ${injNote}`,
+    `Clinical chase! ${winner.id} overhaul ${loserId} by ${margin} — ${potm} stars. ${injNote}`,
+    `${winner.id} hunt down ${scoreA + 1} at ${venueS} (${margin}) behind ${potm}'s match-winning display. ${injNote}`
+  ] : [
+    `${winner.id} defend ${scoreA} at ${venueS} to beat ${loserId} by ${margin} — POTM: ${potm}! ${injNote}`,
+    `Bowling masterclass! ${winner.id} restrict ${loserId} and win by ${margin} (${potm} shines). ${injNote}`,
+    `${winner.id} hold their nerve at ${venueS} to defeat ${loserId} by ${margin} — POTM: ${potm}. ${injNote}`
+  ];
+  let oneLiner = offlineLines[Math.floor(Math.random() * offlineLines.length)];
   if (useGeminiLine && getSavedApiKey()) {
     const mPrompt = `IPL ${label}: ${A.id} (${scoreA}/${wktsA}) vs ${B.id} (${scoreB}/${wktsB} in ${ovB} ov) at ${teamAObj.home}.
 Winner: ${winner.id} by ${margin}. Top performances: ${winBat?.name} ${winBat?.r}(${winBat?.b}), ${winBowl?.name} ${winBowl?.w}/${winBowl?.r}.

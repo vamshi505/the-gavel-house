@@ -1,3 +1,5 @@
+
+function pickRand(arr){ return arr[Math.floor(Math.random() * arr.length)]; }
 // ============================================================================
 // THE GAVEL HOUSE — AI BIDDING BRAIN, HUDDLES, GEMINI PROXY, TRADES & COACHES
 // ============================================================================
@@ -278,10 +280,38 @@ Return ONLY valid JSON: {"lines": ["<b>Coach:</b> ...", "<b>Specialist:</b> ..."
       if (!state.lotCommitments[p.id]) state.lotCommitments[p.id] = {};
       state.lotCommitments[p.id][team.id] = 'PASS';
     }
+    const slotsLeft = Math.max(0, 18 - team.squad.length);
+    const homeShort = team.home.split(' (')[0];
+    const coachOpeners = [
+      `<b>${coach}:</b> "Hold the paddle! ${p.name} is already at ${fmtCr(state.curBid)} with ${state.curLeader||'rivals'} pushing hard. Next bid is ${fmtCr(nextBid)} — do we back him?"`,
+      `<b>${coach}:</b> "Quick pause, team! ${p.name} (${p.phase||roleLabel(p.role)}) is a game-changer, but ${fmtCr(nextBid)} is serious money. Worth stretching?"`,
+      `<b>${coach}:</b> "Look at the board — ${p.name} at ${fmtCr(nextBid)}. If we miss him, who is our Plan B for ${homeShort}?"`,
+      `<b>${coach}:</b> "I love ${p.name}'s T20 impact (OVR ${p.ovr}), but ${state.curLeader||'the other table'} isn't blinking. Should we go one more round?"`,
+      `<b>${coach}:</b> "Timeout! We budgeted ~${fmtCr(ev.val)} for ${p.name}. Going to ${fmtCr(nextBid)} means tightening up on later sets — what's the call?"`
+    ];
+    const specLines = [
+      `<b>${specialist}:</b> "Roster check: ${c.B} Bat, ${c.WK} WK, ${c.AR} AR, ${c.BW} Bowl (${c.OS}/8 OS). On ${homeShort}, a ${p.phase||roleLabel(p.role)} like ${p.name} wins us 2-3 games alone."`,
+      `<b>${specialist}:</b> "Data says ${p.name}'s skill profile (${p.role==='BW'?`Econ ${p.econ||'8.0'}`:`SR ${p.sr||138}`}) is rare in this pool. We only have ${c[p.role]}/${team.targets[p.role]||6} in his role."`,
+      `<b>${specialist}:</b> "Careful — if we overspend here, we still need ${slotsLeft} mandatory slots filled. But ${p.name} is Tier-${p.tier} quality you can't easily replace."`,
+      `<b>${specialist}:</b> "Matchup-wise, ${p.name} (${p.batHand||'R'}HB${p.bowlStyle&&p.bowlStyle!=='—'?' / '+p.bowlStyle:''}) fixes a glaring tactical gap in our Playing XI for ${homeShort}."`,
+      `<b>${specialist}:</b> "We've got ${c.OS}/8 overseas used and ${c.spinners} spinners. ${willStretch ? `Adding ${p.name} elevates our starting XI immediately.` : `There are cheaper value picks coming in the next two sets.`}"`
+    ];
+    const ownerStretch = [
+      `<b>${owner}:</b> "We have ${fmtCr(team.purse)} in the bank. Back your instincts — stretch up to ${fmtCr(ev.val)} and don't let ${state.curLeader||'rivals'} steal him!"`,
+      `<b>${owner}:</b> "Championships need bold calls. You have my green light to push ${p.name} up to ${fmtCr(ev.val)} — raise that paddle!"`,
+      `<b>${owner}:</b> "We came here to build a title squad for ${homeShort}. Go ahead, stretch the budget and lock ${p.name} in!"`,
+      `<b>${owner}:</b> "Purse check looks healthy (${fmtCr(team.purse)} left). Let's stay in the fight for ${p.name} — make them pay or bring him home!"`
+    ];
+    const ownerWalk = [
+      `<b>${owner}:</b> "No panic buying! ${fmtCr(nextBid)} is past our ${fmtCr(ev.val)} ceiling. Let ${state.curLeader||'them'} drain their purse and walk away!"`,
+      `<b>${owner}:</b> "Stay disciplined — we still have ${slotsLeft} slots to fill with ${fmtCr(team.purse)}. Drop out and save our firepower!"`,
+      `<b>${owner}:</b> "That's marquee tax right there. Shake your head, smile at ${state.curLeader||'the rival table'}, and let them overpay!"`,
+      `<b>${owner}:</b> "Good try, but we stick to our valuation (${fmtCr(ev.val)}). Plenty of smart value left in the 520-player pool!"`
+    ];
     lines = [
-      `<b>${coach}:</b> "Hold the paddle! ${p.name} is already at ${fmtCr(state.curBid)}. Next bid is ${fmtCr(nextBid)} — do we stretch for him?"`,
-      `<b>${specialist}:</b> "Squad check: ${c.B} Bat, ${c.WK} WK, ${c.AR} AR, ${c.BW} Bowl, ${c.OS}/8 OS. For ${team.home}, a Tier-${p.tier} ${roleLabel(p.role)} like ${p.name} is huge."`,
-      `<b>${owner}:</b> "We have ${fmtCr(team.purse)} left for ${Math.max(0, 18 - team.squad.length)} mandatory slots. ${willStretch ? `Let's stretch up to ${fmtCr(ev.val)} — we can't let a rival steal him!` : `That's above our valuation (${fmtCr(ev.val)}). Let them burn their purse and walk away!`}"`,
+      pickRand(coachOpeners),
+      pickRand(specLines),
+      willStretch ? pickRand(ownerStretch) : pickRand(ownerWalk),
       `<b style="color:${willStretch?'#34d399':'#f87171'}">📋 FINAL HUDDLE VERDICT (${team.id}):</b> ${willStretch ? `✅ STRETCH BUDGET & STAY IN THE FIGHT!` : `🛑 WALK AWAY — SAVE PURSE FOR NEXT TARGETS!`}`
     ];
   }
@@ -630,16 +660,37 @@ function hammerSold(){
     losers.forEach((lid, idx) => {
       const lt = state.teams.find(x => x.id === lid);
       if (!lt) return;
-      const msg = (isHighPrice && idx % 2 === 0)
-        ? `Smiling! Made ${winTeam.id} burn ${fmtCr(price)} on ${p.name} — saved our ${fmtCr(lt.purse)}!`
-        : `Gutted to miss ${p.name} to ${winTeam.id} — pivoting to Plan B for ${roleLabel(p.role)}.`;
+      const inflateMsgs = [
+        `Smiling! Made ${winTeam.id} burn ${fmtCr(price)} on ${p.name} — our ${fmtCr(lt.purse)} stays intact!`,
+        `Mission accomplished! Pushed ${winTeam.id} way past fair value on ${p.name}. Enjoy the purse dent!`,
+        `Haha, ${fmtCr(price)}?! Glad we dropped out — ${lt.staff[0].split(' (')[0]} has a smarter Plan B ready.`
+      ];
+      const guttedMsgs = [
+        `Gutted to miss ${p.name} to ${winTeam.id} — pivoting straight to our next ${roleLabel(p.role)} target.`,
+        `So close! ${p.name} was #1 on our board, but ${winTeam.id} had deeper pockets on that lot.`,
+        `Tough loss at ${fmtCr(price)}. We'll remember this when ${winTeam.id}'s next target walks out!`,
+        `Fair play to ${winTeam.id}, ${p.name} is a match-winner. Time to hunt value in the next set.`
+      ];
+      const msg = (isHighPrice && idx % 2 === 0) ? pickRand(inflateMsgs) : pickRand(guttedMsgs);
       lt.chatter = msg;
       addReaction(`💬 <b style="color:${lt.color}">${lt.id}:</b> <i>"${msg}"</i>`, lt.color);
     });
-    if (watchers[0] && otherWinStars.length) {
-      const smsg = `Look at ${winTeam.id}'s lineup now: ${otherWinStars.join(' + ')} AND ${p.name}?!`;
-      watchers[0].chatter = `😱 ${smsg}`;
-      addReaction(`😱 <b style="color:${watchers[0].color}">${watchers[0].id}:</b> <i>"${smsg}"</i>`, watchers[0].color);
+    if (watchers[0]) {
+      const watchMsgs = isSteal ? [
+        `How did everyone let ${winTeam.id} steal ${p.name} for just ${fmtCr(price)}?! Bargain of the auction!`,
+        `Massive steal by ${winTeam.id}! ${p.name} at ${fmtCr(price)} is highway robbery.`
+      ] : isHighPrice ? [
+        `${fmtCr(price)} for ${p.name}?! ${winTeam.id} just blew a huge chunk of their purse!`,
+        `Bold call by ${winTeam.id}, but spending ${fmtCr(price)} leaves them tight for bench depth.`
+      ] : otherWinStars.length ? [
+        `Look at ${winTeam.id}'s core now: ${otherWinStars.join(' + ')} AND ${p.name}?! Scary lineup!`,
+        `${winTeam.id} is quietly building a monster XI around ${otherWinStars[0]} and ${p.name}.`
+      ] : [
+        `Smart pickup by ${winTeam.id} — ${p.name} fits ${winTeam.home.split(' (')[0]} nicely.`
+      ];
+      const smsg = pickRand(watchMsgs);
+      watchers[0].chatter = `👀 ${smsg}`;
+      addReaction(`👀 <b style="color:${watchers[0].color}">${watchers[0].id}:</b> <i>"${smsg}"</i>`, watchers[0].color);
     }
     addReaction(`🔨 <b>SOLD:</b> ${p.name} joins <b style="color:${winTeam.color}">${winTeam.id}</b> for ${fmtCr(price)}.`, winTeam.color);
   }
@@ -789,7 +840,8 @@ function quickSimRestAuction(){
 const API_KEY_STORAGE = 'ipl_2026_gemini_key';
 const API_KEY2_STORAGE = 'ipl_2026_gemini_key_2';
 const QUOTA_SAVER_STORAGE = 'ipl_2026_quota_saver';
-const GEMINI_MODELS = ['gemini-3.5-flash-lite', 'gemini-3.8-flash', 'gemini-3.1-flash-lite', 'gemini-3.6-flash', 'gemini-4-hydrogen'];
+const GEMINI_MODELS = ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.0-flash-lite', 'gemini-2.0-flash'];
+let geminiCooldownUntil = 0;
 let workingGeminiModel = null;
 let activeKeyIndex = 0;
 let lastGeminiError = '';
@@ -862,6 +914,7 @@ function updateAiModeStatus(){
 
 // Fast JSON caller with 7s timeout, Dual-Key Auto-Rotation, Thinking Filter & Model Fallback
 async function callGeminiJSON(prompt, temperature=0.8, timeoutMs=7000){
+  if (Date.now() < geminiCooldownUntil) return null;
   const keys = getSavedApiKeys();
   if (!keys.length) {
     if (!isHostedOnline()) return null;
@@ -909,6 +962,7 @@ async function callGeminiJSON(prompt, temperature=0.8, timeoutMs=7000){
           if (res.status === 401 || res.status === 403) break;
           if (res.status === 429) {
             if (keys.length > 1 && kStep === 0) break;
+            geminiCooldownUntil = Date.now() + 45000;
             continue;
           }
           continue;
@@ -1454,11 +1508,19 @@ async function runTradeRoundtable(){
     return { t, c, need, surplus };
   });
 
-  // Show ALL 10 teams speaking in the Roundtable!
-  const chat = profiles.map(pr => ({
-    team: pr.t,
-    text: `Looking for a ${roleLabel(pr.need)} (currently ${pr.c[pr.need]}). Open to 1-for-1 swaps from our ${roleLabel(pr.surplus)} group (${fmtCr(pr.t.purse)} left).`
-  }));
+  // Show ALL 10 teams speaking in the Roundtable with varied GM lines!
+  const chat = profiles.map((pr, i) => {
+    const coach = pr.t.staff[0].split(' (')[0];
+    const homeS = pr.t.home.split(' (')[0];
+    const opts = [
+      `Looking for a quality ${roleLabel(pr.need)} (only ${pr.c[pr.need]} signed). Open to 1-for-1 swaps from our ${roleLabel(pr.surplus)} bench (${fmtCr(pr.t.purse)} left).`,
+      `${coach} wants one more ${roleLabel(pr.need)} for ${homeS}. Willing to move a ${roleLabel(pr.surplus)} if the OVR matches!`,
+      `We're heavy on ${roleLabel(pr.surplus)} (${pr.c[pr.surplus]}) and light on ${roleLabel(pr.need)}. Any GM want a fair swap?`,
+      `Sitting on ${fmtCr(pr.t.purse)} — ready to talk ${roleLabel(pr.need)} upgrades without breaking our Playing XI balance.`,
+      `Our ${homeS} gameplan needs an extra ${roleLabel(pr.need)}. Send us serious offers for our ${roleLabel(pr.surplus)} depth!`
+    ];
+    return { team: pr.t, text: opts[(i + pr.t.squad.length) % opts.length] };
+  });
 
   const proposals = [];
   const usedTeams = new Set();
@@ -2097,8 +2159,22 @@ Return ONLY valid JSON: {"CSK": {"reply": "1 sharp sentence (max 22 words)", "ac
       } else if (wantsApprove && teamProp) {
         action = 'EXECUTE';
         reply = `Agreed! That trade strengthens our ${t.home.split(' (')[0]} balance — sealing the ${teamProp.teamA}⇄${teamProp.teamB} deal immediately!`;
+      } else if (/(why|reason|explain)/i.test(ql)) {
+        reply = teamProp
+          ? `Simple: this swap fills our ${c.WK<2?'keeper':c.spinners<2?'spin':c.BW<7?'bowling':'batting'} gap for ${t.home.split(' (')[0]} without hurting our overseas balance.`
+          : `We haven't proposed a swap yet — ${t.staff[0].split(' (')[0]} is happy with our core unless a top ${c.WK<2?'WK':c.BW<7?'bowler':'batter'} becomes available.`;
+      } else if (/(who|available|offer|sell|give)/i.test(ql)) {
+        const tradable = t.squad.map(id=>state.players[id]).filter(Boolean).sort((a,b)=>a.ovr-b.ovr).slice(0,2).map(p=>p.name).join(' or ');
+        reply = tradable
+          ? `We could listen to fair offers involving ${tradable} if you send us a solid ${c.WK<2?'Wicket-Keeper':c.spinners<2?'Spinner':c.BW<7?'Bowler':'Batter'} in return.`
+          : `Still building our roster (${t.squad.length}/25) — check back once we have bench depth to trade!`;
       } else {
-        reply = `At ${t.id} (${t.squad.length}/25, ${fmtCr(t.purse)} left), we're open to fair 1-for-1 swaps to upgrade our ${c.WK<2?'WK':c.spinners<2?'Spin':c.BW<7?'Bowling':'Batting'} depth.`;
+        const twOpts = [
+          `At ${t.id} (${t.squad.length}/25, ${fmtCr(t.purse)} left), we're open to fair 1-for-1 swaps to upgrade our ${c.WK<2?'WK':c.spinners<2?'Spin':c.BW<7?'Bowling':'Batting'} depth.`,
+          `${t.staff[0].split(' (')[0]} says ${t.id} will only trade if it directly strengthens our ${t.home.split(' (')[0]} Playing XI.`,
+          `No panic trades from ${t.id} — send us a balanced OVR offer in the Universal Trade Desk and we'll review it!`
+        ];
+        reply = twOpts[(idx + t.squad.length) % twOpts.length];
       }
     }
 
@@ -2218,7 +2294,27 @@ Return ONLY valid JSON: {"CSK": {"reply": "✅ GOOD IDEA: ...", "rebuild": true,
     if (!reply) {
       const { xi, impact } = computePlayingXII(t);
       const bowlers = xi.filter(p => p.role==='BW'||p.role==='AR').length;
-      reply = `⚖️ MIXED IDEA: Our current XI has ${bowlers} bowling options with ${impact ? impact.name : 'our top bench pick'} as Impact Sub. Tell me if you want me to rebuild the batting order or add a spinner!`;
+      const spinners = xi.filter(p => isSpinner(p)).length;
+      const hasWK = xi.some(p => p.role==='WK');
+      const homeS = t.home.split(' (')[0];
+      if (/(balance|good or bad|review)/i.test(ql)) {
+        reply = (bowlers >= 5 && hasWK)
+          ? `✅ GOOD IDEA: Our ${homeS} XI is well-balanced with ${bowlers} bowling options, ${spinners} spinner(s), and ${impact ? impact.name : 'a strong bench'} as Impact Sub.`
+          : `❌ BAD IDEA: We have a gap (${!hasWK?'missing a specialist WK':'only '+bowlers+' bowling options'}) — tell me to "fix & rebuild XI" and I'll sort it!`;
+      } else if (/(impact|sub|12th)/i.test(ql)) {
+        reply = impact
+          ? `✅ GOOD IDEA: ${impact.name} (${roleLabel(impact.role)}, OVR ${impact.ovr}) is our ideal Impact Sub — he gives us ${impact.role==='BW'||impact.role==='AR'?'an extra bowling weapon defending':'extra batting firepower chasing'}!`
+          : `⚖️ MIXED IDEA: Sign more depth so we have a specialist Indian Impact Sub ready for ${homeS}.`;
+      } else if (/(weak|flaw|problem|gap|missing)/i.test(ql)) {
+        const weakTxt = !hasWK ? 'no specialist keeper in the XI' : bowlers < 5 ? 'light on a 5th bowling option' : spinners < 2 && /chepauk|ekana|jaipur/i.test(homeS) ? `only ${spinners} spinner for ${homeS}` : 'finishing power in overs 17-20';
+        reply = `⚖️ HONEST ASSESSMENT: Our biggest area to watch is ${weakTxt}. Say "rebuild XI" or edit manually anytime!`;
+      } else {
+        const coachOpts = [
+          `⚖️ MIXED IDEA: Our current XI has ${bowlers} bowling options and ${spinners} spinner(s) with ${impact ? impact.name : 'bench depth'} as Impact Sub. Say "fix batting order" or "add spinner" to rebuild!`,
+          `✅ GOOD IDEA: ${coachName} likes our ${homeS} combination — ${xi[0]?.name||'our openers'} up top and ${bowlers} bowlers give us control in all 3 phases.`
+        ];
+        reply = pickRand(coachOpts);
+      }
     }
 
     const actBadge = didRebuild ? ` <span class="pill pill-live" style="font-size:9px;padding:2px 6px;margin-left:4px">⚡ PLAYING XII REBUILT</span>` : '';
