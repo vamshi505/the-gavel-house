@@ -1,0 +1,1936 @@
+// ============================================================================
+// THE GAVEL HOUSE — PHASE-AWARE T20 SEASON ENGINE, PLAYING XII & ANALYTICS
+// ============================================================================
+// ==================== 11. EDITABLE & GEMINI PITCH-BALANCED PLAYING XII, GEMINI SENIOR ANALYST & MATCH-BY-MATCH SEASON ====================
+let editingXITeamId = null;
+let tempXIIds = [];
+let tempImpactId = null;
+
+function battingPosScore(p){
+  if (!p) return 99;
+  if (p.role === 'BW') return 80 + (100 - p.ovr) * 0.1;
+  if (KNOWN_OPENERS.has(p.name)) return 10 + (100 - p.ovr) * 0.1;
+  if (p.role === 'B' && !KNOWN_FINISHERS.has(p.name)) return 25 + (100 - p.ovr) * 0.1;
+  if (p.role === 'WK' && !KNOWN_FINISHERS.has(p.name)) return 35 + (100 - p.ovr) * 0.1;
+  if (p.role === 'B' && KNOWN_FINISHERS.has(p.name)) return 48 + (100 - p.ovr) * 0.1;
+  if (p.role === 'WK' && KNOWN_FINISHERS.has(p.name)) return 52 + (100 - p.ovr) * 0.1;
+  if (p.role === 'AR') return (isSpinner(p) ? 64 : 58) + (100 - p.ovr) * 0.1;
+  return 50;
+}
+
+function autoSortBattingOrder(idList){
+  return [...idList].sort((a, b) => battingPosScore(state.players[a]) - battingPosScore(state.players[b]));
+}
+
+// Strict IPL rule: if 4 OS are in the XI, Impact Sub MUST be Indian (!p.os).
+function pickWiseImpactSub(t, xiIds, pitchDesc=''){
+  const xiSet = new Set(xiIds);
+  const xiPlayers = xiIds.map(id => state.players[id]).filter(Boolean);
+  const osInXI = xiPlayers.filter(p => p.os).length;
+  const xiBowlers = xiPlayers.filter(p => p.role === 'BW' || p.role === 'AR').length;
+  const xiSpinners = xiPlayers.filter(p => isSpinner(p)).length;
+  const xiHasWK = xiPlayers.some(p => p.role === 'WK');
+  const pitchL = (pitchDesc || t.home || '').toLowerCase();
+  const isSpinPitch = pitchL.includes('chepauk') || pitchL.includes('ekana') || pitchL.includes('jaipur') || pitchL.includes('spin');
+
+  let bench = t.squad
+    .map(id => state.players[id])
+    .filter(p => p && !xiSet.has(p.id) && (osInXI >= 4 ? !p.os : true));
+
+  if (!bench.length) {
+    bench = t.squad.map(id => state.players[id]).filter(p => p && !xiSet.has(p.id));
+  }
+  if (!bench.length) return null;
+
+  const scored = bench.map(p => {
+    let sc = p.ovr;
+    if (p.role === 'WK' && xiHasWK) sc -= 12;
+    if (xiBowlers <= 5 && (p.role === 'BW' || p.role === 'AR')) sc += 9;
+    if (xiBowlers >= 6 && (p.role === 'B' || KNOWN_FINISHERS.has(p.name))) sc += 10;
+    if (isSpinPitch && isSpinner(p) && xiSpinners < 2) sc += 11;
+    return { p, sc };
+  }).sort((a, b) => b.sc - a.sc);
+
+  return scored[0].p;
+}
+
+function sanitizeImpactForXI(t, xiIds, curImpactId, pitchDesc=''){
+  const xiSet = new Set(xiIds);
+  const osInXI = xiIds.filter(id => state.players[id]?.os).length;
+  const cand = (curImpactId !== null && curImpactId !== undefined) ? state.players[curImpactId] : null;
+  const isValidCand = cand && t.squad.includes(cand.id) && !xiSet.has(cand.id) && !(osInXI >= 4 && cand.os);
+  if (isValidCand) return cand;
+  return pickWiseImpactSub(t, xiIds, pitchDesc);
+}
+
+function computePlayingXII(t, pitchDesc=''){
+  const validSet = new Set(t.squad);
+  if (Array.isArray(t.customXI) && t.customXI.length === 11 && t.customXI.every(id => validSet.has(id))) {
+    const xi = t.customXI.map(id => state.players[id]).filter(Boolean);
+    const impact = sanitizeImpactForXI(t, t.customXI, t.customImpact, pitchDesc);
+    t.customImpact = impact ? impact.id : null;
+    if (xi.length === 11) return { xi, impact };
+  }
+
+  const pitchL = (pitchDesc || t.home || '').toLowerCase();
+  const isSpinPitch = pitchL.includes('chepauk') || pitchL.includes('ekana') || pitchL.includes('jaipur') || pitchL.includes('spin');
+  const sorted = t.squad.map(id=>state.players[id]).filter(Boolean).sort((a,b)=>b.ovr-a.ovr);
+  const xi = [];
+  let os = 0;
+  const pickCond = (fn, maxCount) => {
+    let added = 0;
+    for (const p of sorted) {
+      if (added >= maxCount || xi.length >= 11) break;
+      if (xi.includes(p) || !fn(p)) continue;
+      if (p.os && os >= 4) continue;
+      xi.push(p); if (p.os) os++; added++;
+    }
+  };
+  pickCond(p => p.role === 'WK', 1);
+  pickCond(p => p.role === 'B', 3);
+  pickCond(p => p.role === 'AR', 2);
+  if (isSpinPitch) {
+    pickCond(p => p.role === 'BW' && isSpinner(p), 2);
+    pickCond(p => p.role === 'BW' && !isSpinner(p), 2);
+  } else {
+    pickCond(p => p.role === 'BW' && !isSpinner(p), 3);
+    pickCond(p => p.role === 'BW' && isSpinner(p), 1);
+  }
+  pickCond(() => true, 11);
+
+  const orderedIds = autoSortBattingOrder(xi.map(p => p.id));
+  const orderedXI = orderedIds.map(id => state.players[id]);
+  const impact = pickWiseImpactSub(t, orderedIds, pitchDesc);
+  return { xi: orderedXI, impact };
+}
+
+function openXIEditor(tid){
+  const t = state.teams.find(x => x.id === tid);
+  if (!t || t.squad.length < 11) { showToast('Team needs at least 11 signed players to edit Playing XII.'); return; }
+  editingXITeamId = tid;
+  const { xi, impact } = computePlayingXII(t);
+  tempXIIds = xi.map(p => p.id);
+  tempImpactId = impact ? impact.id : null;
+  document.getElementById('xiEdTitle').textContent = `✏️ ${t.id} PLAYING XII & BATTING ORDER`;
+  document.getElementById('xiEdSub').textContent = `${t.home} • ▲ ▼ to reorder (4 OS in XI = Indian Impact Only)`;
+  renderXIEditorList();
+  document.getElementById('xiEditorBackdrop').classList.add('open');
+}
+
+function moveXIPlayer(pid, delta){
+  const idx = tempXIIds.indexOf(pid);
+  if (idx === -1) return;
+  const newIdx = idx + delta;
+  if (newIdx < 0 || newIdx >= tempXIIds.length) return;
+  [tempXIIds[idx], tempXIIds[newIdx]] = [tempXIIds[newIdx], tempXIIds[idx]];
+  beep(520 + (delta < 0 ? 100 : -60), 0.05, 'triangle', 0.08);
+  renderXIEditorList();
+}
+
+function renderXIEditorList(){
+  const t = state.teams.find(x => x.id === editingXITeamId);
+  if (!t) return;
+  const osCount = tempXIIds.filter(id => state.players[id]?.os).length;
+  const impObj = tempImpactId !== null ? state.players[tempImpactId] : null;
+  const impName = impObj ? `${impObj.name}${impObj.os?' ✈️':' (IND)'}` : 'None';
+  document.getElementById('xiEdCount').textContent = `XI: ${tempXIIds.length}/11 • OS: ${osCount}/4 • Impact: ${impName}`;
+
+  const xiSet = new Set(tempXIIds);
+  const startersHTML = tempXIIds.map((pid, idx) => {
+    const p = state.players[pid];
+    if (!p) return '';
+    return `
+      <div class="pool-row" style="border-color:#10b981;background:rgba(16,185,129,0.10)">
+        <div style="display:flex;align-items:center;gap:7px;min-width:0;flex:1">
+          <span class="pill" style="padding:3px 6px;min-width:28px;justify-content:center;color:var(--gold)">#${idx+1}</span>
+          <div class="p-info">
+            <div class="p-name">${p.name}${getFormBadge(p.id)} ${p.os?'✈️':''} ${t.captainId===p.id?'<span style="color:var(--gold)">[©]</span>':t.vcId===p.id?'<span style="color:#38bdf8">[VC]</span>':''}</div>
+            <div class="p-sub">${roleLabel(p.role)}${isSpinner(p)?' (Spin)':p.role==='BW'?' (Pace)':''} • OVR ${p.ovr} • T${p.tier}</div>
+          </div>
+        </div>
+        <div style="display:flex;gap:3px;flex-shrink:0">
+          <button class="btn btn-sm" style="padding:5px 7px" ${idx===0?'disabled':''} onclick="moveXIPlayer(${p.id},-1)">▲</button>
+          <button class="btn btn-sm" style="padding:5px 7px" ${idx===tempXIIds.length-1?'disabled':''} onclick="moveXIPlayer(${p.id},1)">▼</button>
+          <button class="btn btn-sm ${t.captainId===p.id?'btn-blue':''}" style="padding:5px 7px" onclick="setTeamLeader(${p.id},'C')">©</button>
+          <button class="btn btn-sm btn-red" style="padding:5px 7px" onclick="toggleXIPlayer(${p.id})">✕</button>
+        </div>
+      </div>`;
+  }).join('');
+
+  const benchPlayers = t.squad
+    .map(id => state.players[id])
+    .filter(p => p && !xiSet.has(p.id))
+    .sort((a,b) => (a.id === tempImpactId ? -1 : b.id === tempImpactId ? 1 : b.ovr - a.ovr));
+
+  const benchHTML = benchPlayers.map(p => {
+    const isImp = tempImpactId === p.id;
+    const osBlocked = p.os && osCount >= 4;
+    return `
+      <div class="pool-row" style="${isImp?'border-color:var(--gold);background:var(--gold-dim)':''}">
+        <div class="p-info">
+          <div class="p-name">${p.name}${getFormBadge(p.id)} ${p.os?'✈️':'🇮🇳'} ${isImp?'<span style="color:var(--gold)">[⚡ IMPACT]</span>':''}</div>
+          <div class="p-sub">${roleLabel(p.role)}${isSpinner(p)?' (Spin)':p.role==='BW'?' (Pace)':''} • OVR ${p.ovr} • T${p.tier}</div>
+        </div>
+        <div style="display:flex;gap:4px">
+          <button class="btn btn-sm" ${osBlocked?'disabled':''} onclick="toggleXIPlayer(${p.id})">+ XI</button>
+          <button class="btn btn-sm ${isImp?'btn-gold':''}" ${osBlocked?'disabled':''} onclick="setImpactSub(${p.id})">${isImp?'⚡ Sub':'Sub'}</button>
+        </div>
+      </div>`;
+  }).join('');
+
+  document.getElementById('xiEdList').innerHTML =
+    `<div style="font-size:10px;font-weight:800;color:#10b981;font-family:'IBM Plex Mono',monospace;margin-bottom:2px">PLAYING XI BATTING ORDER (#1 TO #11)</div>` +
+    startersHTML +
+    `<div style="font-size:10px;font-weight:800;color:var(--gold);font-family:'IBM Plex Mono',monospace;margin:8px 0 2px">BENCH &amp; IMPACT PLAYER ${osCount>=4?'(4 OS IN XI → INDIAN IMPACT ONLY)':''}</div>` +
+    benchHTML;
+}
+
+function toggleXIPlayer(pid){
+  const idx = tempXIIds.indexOf(pid);
+  if (idx !== -1) {
+    tempXIIds.splice(idx, 1);
+  } else {
+    if (tempXIIds.length >= 11) { showToast('Remove a starter first (max 11 in XI).'); return; }
+    const p = state.players[pid];
+    const osNow = tempXIIds.filter(id => state.players[id]?.os).length;
+    if (p.os && osNow >= 4) { showToast('Max 4 Overseas players allowed in Playing XI!'); return; }
+    if (tempImpactId === pid) tempImpactId = null;
+    tempXIIds.push(pid);
+    const newOs = tempXIIds.filter(id => state.players[id]?.os).length;
+    if (newOs >= 4 && tempImpactId !== null && state.players[tempImpactId]?.os) {
+      tempImpactId = null;
+      showToast('4 Overseas in XI — cleared Overseas Impact Sub.');
+    }
+  }
+  renderXIEditorList();
+}
+
+function setImpactSub(pid){
+  const p = state.players[pid];
+  const osNow = tempXIIds.filter(id => id !== pid && state.players[id]?.os).length;
+  if (p && p.os && osNow >= 4) {
+    showToast('With 4 Overseas in Playing XI, Impact Player must be Indian.');
+    return;
+  }
+  if (tempXIIds.includes(pid)) {
+    tempXIIds = tempXIIds.filter(id => id !== pid);
+  }
+  tempImpactId = (tempImpactId === pid) ? null : pid;
+  renderXIEditorList();
+}
+
+function setTeamLeader(pid, type){
+  const t = state.teams.find(x => x.id === editingXITeamId);
+  if (!t) return;
+  if (type === 'C') {
+    if (t.vcId === pid) t.vcId = null;
+    t.captainId = (t.captainId === pid) ? null : pid;
+  } else {
+    if (t.captainId === pid) t.captainId = null;
+    t.vcId = (t.vcId === pid) ? null : pid;
+  }
+  renderXIEditorList();
+}
+
+function saveManualXI(){
+  if (tempXIIds.length !== 11) { showToast(`Select exactly 11 starters (currently ${tempXIIds.length}/11).`); return; }
+  const t = state.teams.find(x => x.id === editingXITeamId);
+  if (!t) return;
+  const osCount = tempXIIds.filter(id => state.players[id]?.os).length;
+  if (osCount >= 4 && tempImpactId !== null && state.players[tempImpactId]?.os) {
+    showToast('4 Overseas in XI — Impact Player must be Indian.');
+    return;
+  }
+  if (tempImpactId === null) {
+    const autoImp = pickWiseImpactSub(t, tempXIIds, t.home);
+    tempImpactId = autoImp ? autoImp.id : null;
+  }
+  t.customXI = [...tempXIIds];
+  t.customImpact = tempImpactId;
+  t.xiSource = 'MANUAL';
+  t.xiNote = 'Playing XII customized manually.';
+  closeDrawers();
+  showToast(`Saved ${t.id} Playing XII!`);
+  renderAll(); saveState();
+  if (pendingPreMatch && (pendingPreMatch.t1Id === t.id || pendingPreMatch.t2Id === t.id)) {
+    renderPreMatchLineups();
+    document.getElementById('preMatchBackdrop').classList.add('open');
+  }
+}
+
+let aiPickingInProgress = {};
+
+function formatSquadForGeminiPrompt(t){
+  const st = state.seasonData && state.seasonData.pStats ? state.seasonData.pStats : {};
+  return t.squad.map(id => {
+    const p = state.players[id];
+    const bowlStyle = isSpinner(p) ? 'Spin' : (p.role === 'BW' || p.role === 'AR') ? 'Pace' : 'Bat';
+    const posHint = KNOWN_OPENERS.has(p.name) ? 'Opener/Top' : KNOWN_FINISHERS.has(p.name) ? 'Middle/Finisher' : p.role === 'BW' ? 'Tail(8-11)' : 'Middle';
+    const statTxt = st[id] && (st[id].runs > 0 || st[id].wkts > 0) ? ` | Season:${st[id].runs}R,${st[id].wkts}W` : '';
+    return `ID:${p.id} | ${p.name} | ${roleLabel(p.role)} (${bowlStyle}, ${posHint}) | ${p.os?'OS':'IND'} | OVR ${p.ovr}${statTxt}`;
+  }).join('\n');
+}
+
+function validateAndApplyGeminiXI(t, res, pitchDesc=''){
+  const validSet = new Set(t.squad);
+  const cleanXI = [];
+  let os = 0;
+  if (res && Array.isArray(res.xi)) {
+    for (const id of res.xi) {
+      const numId = parseInt(id, 10);
+      if (!validSet.has(numId) || cleanXI.includes(numId)) continue;
+      const p = state.players[numId];
+      if (!p || (p.os && os >= 4)) continue;
+      cleanXI.push(numId);
+      if (p.os) os++;
+      if (cleanXI.length === 11) break;
+    }
+  }
+  const sorted = t.squad.map(id=>state.players[id]).filter(Boolean).sort((a,b)=>b.ovr-a.ovr);
+  for (const p of sorted) {
+    if (cleanXI.length === 11) break;
+    if (cleanXI.includes(p.id) || (p.os && os >= 4)) continue;
+    cleanXI.push(p.id); if (p.os) os++;
+  }
+
+  const badOrder = cleanXI.some((id, idx) => {
+    const p = state.players[id];
+    return (idx <= 5 && p.role === 'BW') || (idx >= 8 && (p.role === 'B' || p.role === 'WK'));
+  });
+  const finalXI = badOrder ? autoSortBattingOrder(cleanXI) : cleanXI;
+
+  const finalOs = finalXI.filter(id => state.players[id]?.os).length;
+  let impId = res && res.impact !== undefined ? parseInt(res.impact, 10) : null;
+  const impObj = (impId !== null && validSet.has(impId) && !finalXI.includes(impId)) ? state.players[impId] : null;
+  if (!impObj || (finalOs >= 4 && impObj.os)) {
+    const wiseImp = pickWiseImpactSub(t, finalXI, pitchDesc || t.home);
+    impId = wiseImp ? wiseImp.id : null;
+  }
+
+  t.customXI = finalXI;
+  t.customImpact = impId;
+  t.xiSource = 'GEMINI';
+  if (res && finalXI.includes(parseInt(res.captainId, 10))) t.captainId = parseInt(res.captainId, 10);
+  if (res && finalXI.includes(parseInt(res.vcId, 10)) && parseInt(res.vcId, 10) !== t.captainId) t.vcId = parseInt(res.vcId, 10);
+  t.xiNote = (res && res.note) ? res.note : `Pitch-balanced XII selected for ${pitchDesc || t.home}.`;
+  return { xi: finalXI, impact: impId };
+}
+
+async function aiPickPlayingXII(tid, fromEditor=false, silent=false, customPitch=''){
+  const t = state.teams.find(x => x.id === tid);
+  if (!t || t.squad.length < 11) { if (!silent) showToast(`${tid} needs at least 11 players first!`); return; }
+  if (!getSavedApiKey()) {
+    const fb = computePlayingXII(t, customPitch || t.home);
+    t.customXI = fb.xi.map(p => p.id);
+    t.customImpact = fb.impact ? fb.impact.id : null;
+    if (fromEditor) { tempXIIds = [...t.customXI]; tempImpactId = t.customImpact; renderXIEditorList(); }
+    if (!silent) showToast('Applied smart pitch-balanced offline XII.');
+    renderSquads(); saveState();
+    return;
+  }
+  if (aiPickingInProgress[tid]) return;
+  aiPickingInProgress[tid] = true;
+  if (!fromEditor) renderSquads();
+
+  const targetPitch = customPitch || t.home;
+  const prompt = `Pick Playing XI (11 unique IDs in batting order #1-#11) + 1 Impact Sub for ${t.name} (${t.id}) on ${targetPitch}.
+Squad:
+${formatSquadForGeminiPrompt(t)}
+
+Rules:
+1) Max 4 Overseas (OS) in XI.
+2) If 4 OS are in XI, Impact Sub MUST be Indian (!os).
+3) Never put specialist bowlers in #1-#6 or specialist batters in #8-#11.
+Return ONLY valid JSON: {"xi": [11 ids], "impact": id, "captainId": id, "vcId": id, "note": "short reason"}`;
+
+  const res = await callGeminiJSON(prompt, 0.35, 6500);
+  aiPickingInProgress[tid] = false;
+  if (!res || !Array.isArray(res.xi)) {
+    if (!silent) showToast(`AI XI fallback: ${lastGeminiError || 'offline mode'}`);
+    renderSquads();
+    return;
+  }
+  const applied = validateAndApplyGeminiXI(t, res, targetPitch);
+  if (fromEditor) { tempXIIds = [...applied.xi]; tempImpactId = applied.impact; renderXIEditorList(); }
+  if (!silent) { sfxTrade(); showToast(`Updated ${t.id} Playing XII!`); }
+  renderSquads(); saveState();
+}
+
+async function aiPickAllPlayingXIIs(){
+  if (!getSavedApiKey()) { showToast('Add a Gemini API key in Settings for AI XI selection.'); return; }
+  const minSq = Math.min(...state.teams.map(t => t.squad.length));
+  if (minSq < 11) { showToast('All teams need at least 11 players first.'); return; }
+  for (const t of state.teams) {
+    await aiPickPlayingXII(t.id, false, true);
+  }
+  showToast('Updated Playing XIIs for all 10 teams.');
+  renderAll(); saveState();
+}
+
+// Local baseline score (used as fallback & match engine strength)
+function teamCoachEval(t){
+  const c = teamRoleCounts(t);
+  const { xi, impact } = computePlayingXII(t);
+  if (xi.length === 0) {
+    return { overall:4.0, bat:4.0, bowl:4.0, ar:4.0, bal:4.0, xi:[], impact:null, avgOvr:0, strength:'Fresh purse ready to build', weakness:'No players signed yet' };
+  }
+  const batters = xi.filter(p => p.role==='B'||p.role==='WK'||p.role==='AR');
+  const bowlers = xi.filter(p => p.role==='BW'||p.role==='AR');
+  const allRounders = xi.filter(p => p.role==='AR');
+  const tierSCount = xi.filter(p => p.tier==='S').length;
+  const indCoreCount = xi.filter(p => !p.os && p.ovr >= 82).length;
+  const avg = arr => arr.length ? arr.reduce((s,p)=>s+p.ovr,0)/arr.length : 64;
+  const scale = (v, lo, hi) => Math.min(9.6, Math.max(4.5, 4.5 + ((v - lo) / (hi - lo)) * 5.0));
+
+  const batScore = +(scale(avg(batters), 68, 94) + (batters.length >= 6 ? 0.3 : -0.6)).toFixed(1);
+  const bowlScore = +(scale(avg(bowlers), 68, 94) + (bowlers.length >= 5 ? 0.3 : -0.7)).toFixed(1);
+  const arScore = +(scale(avg(allRounders), 68, 92) + (allRounders.length >= 2 ? 0.4 : -0.8)).toFixed(1);
+  let balScore = 6.5;
+  if (c.WK >= 1) balScore += 0.8; else balScore -= 1.4;
+  if (indCoreCount >= 4) balScore += 0.9; else if (indCoreCount <= 1) balScore -= 0.8;
+  if (tierSCount >= 2) balScore += 0.7; else if (tierSCount === 0) balScore -= 0.7;
+  if (xi.length < 11) balScore -= 1.5;
+  balScore = +Math.min(9.5, Math.max(4.5, balScore)).toFixed(1);
+
+  const overall = +Math.min(9.5, Math.max(4.8, (batScore*0.32 + bowlScore*0.32 + arScore*0.18 + balScore*0.18))).toFixed(1);
+  const avgOvr = Math.round(avg(xi));
+  const bestBat = [...batters].sort((a,b)=>b.ovr-a.ovr)[0];
+  const bestBowl = [...bowlers].sort((a,b)=>b.ovr-a.ovr)[0];
+
+  return {
+    overall, bat:Math.min(9.6,batScore), bowl:Math.min(9.6,bowlScore), ar:Math.min(9.6,arScore), bal:balScore,
+    xi, impact, avgOvr,
+    strength: bestBat ? `Led by ${bestBat.name} & ${bestBowl ? bestBowl.name : 'core depth'} for ${t.home}` : 'Balanced roster',
+    weakness: c.WK===0 ? 'Missing specialist keeper' : bowlers.length<5 ? 'Light on 5th bowling option' : 'Needs strong Impact Sub execution'
+  };
+}
+
+function exportSquadsCSV(){
+  const rows = [['Team','Player','Role','Origin','Set','Tier','OVR','Price_Lakhs']];
+  state.teams.forEach(t => {
+    t.squad.forEach(id => {
+      const p = state.players[id];
+      rows.push([t.id, `"${p.name}"`, roleLabel(p.role), p.os?'Overseas':'Indian', p.set, p.tier, p.ovr, p.soldPrice]);
+    });
+  });
+  const blob = new Blob([rows.map(r=>r.join(',')).join('\n')], { type:'text/csv' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'IPL_Mega_Auction_Squads.csv';
+  a.click();
+  showToast('Exported all 10 squads to CSV!');
+}
+
+function simSingleH2H(){
+  const idA = document.getElementById('h2hTeamA').value;
+  const idB = document.getElementById('h2hTeamB').value;
+  if (idA === idB) { showToast('Pick two different teams!'); return; }
+  const tA = state.teams.find(t=>t.id===idA), tB = state.teams.find(t=>t.id===idB);
+  const sA = teamCoachEval(tA), sB = teamCoachEval(tB);
+  const scA = Math.round(148 + (sA.overall - 6) * 14 + (Math.random() * 48 - 16));
+  const wA = Math.min(10, Math.floor(3 + Math.random() * 6));
+  const rawB = Math.round(148 + (sB.overall - 6) * 14 + (Math.random() * 48 - 16));
+  const bWins = rawB >= scA;
+  const scB = bWins ? (scA + 1 + Math.floor(Math.random() * 6)) : Math.min(scA - 1, rawB);
+  const wB = bWins ? Math.min(8, Math.floor(2 + Math.random() * 6)) : Math.min(10, Math.floor(5 + Math.random() * 5));
+  const win = bWins ? tB : tA;
+  const margin = bWins ? `${10 - wB} wickets` : `${scA - scB} runs`;
+  const starPool = (win.id===tA.id ? sA.xi : sB.xi);
+  const potm = starPool.length ? starPool[Math.floor(Math.random()*Math.min(4, starPool.length))].name : 'Team Captain';
+  sfxCrowdRoar(0.9);
+  document.getElementById('h2hResultBox').innerHTML = `
+    <div class="msg" style="border-left-color:${win.color}">
+      <b>${tA.id} ${scA}/${wA} (20 ov) vs ${tB.id} ${scB}/${wB}</b><br/>
+      🏆 <b style="color:${win.color}">${win.name}</b> won by <b>${margin}</b> • Player of the Match: <b>${potm}</b>
+    </div>`;
+}
+
+// GEMINI SENIOR ANALYST REPORT (Genuine tactical reviews for all 10 squads!)
+async function runCoachAnalysis(){
+  const wrap = document.getElementById('coachReportWrap');
+  const baseReports = state.teams.map(t => ({ t, ev: teamCoachEval(t) }));
+
+  if (getSavedApiKey()) {
+    wrap.innerHTML = `<div class="panel"><div class="sec-title">🧠 Gemini Senior Analyst reviewing all 10 squads...</div><div style="font-size:12px;color:var(--muted);margin-top:6px">Evaluating Playing XII balance, home pitch fit, death bowling, batting firepower &amp; bench depth...</div></div>`;
+    const summaryText = baseReports.map(r => {
+      const xiNames = r.ev.xi.map(p => `${p.name}(${p.role}${p.os?',OS':''})`).join(', ') || 'None';
+      const imp = r.ev.impact ? r.ev.impact.name : 'None';
+      return `${r.t.id} (${r.t.home}, Sq:${r.t.squad.length}/25, Purse:${fmtCr(r.t.purse)}): XI=[${xiNames}], Impact=${imp}`;
+    }).join('\n');
+
+    const prompt = `You are a brutally honest, world-class IPL Senior Cricket Analyst & Head Selector reviewing all 10 Mega Auction squads.
+Squads:
+${summaryText}
+
+For EACH of the 10 teams (CSK, MI, RCB, KKR, SRH, RR, DC, PBKS, GT, LSG), give a genuine, honest evaluation:
+- "overall", "bat", "bowl", "ar", "bal": realistic ratings out of 10 (e.g. 6.8 to 9.4, spread them honestly based on real player quality & pitch fit!).
+- "strength": 1 specific tactical strength naming real players from their XI.
+- "weakness": 1 genuine tactical flaw/gap (e.g., lack of death bowling, weak #6, too few spinners for home ground, thin keeper depth).
+Return ONLY valid JSON: {"CSK": {"overall": 8.4, "bat": 8.2, "bowl": 8.6, "ar": 8.5, "bal": 8.4, "strength": "...", "weakness": "..."}, ...}`;
+
+    const aiMap = await callGeminiJSON(prompt, 0.7, 6500);
+    if (aiMap) {
+      baseReports.forEach(r => {
+        const g = aiMap[r.t.id];
+        if (g && typeof g.overall === 'number') {
+          r.ev.overall = +Math.min(9.7, Math.max(4.5, g.overall)).toFixed(1);
+          r.ev.bat = +(g.bat || r.ev.bat).toFixed(1);
+          r.ev.bowl = +(g.bowl || r.ev.bowl).toFixed(1);
+          r.ev.ar = +(g.ar || r.ev.ar).toFixed(1);
+          r.ev.bal = +(g.bal || r.ev.bal).toFixed(1);
+          if (g.strength) r.ev.strength = g.strength;
+          if (g.weakness) r.ev.weakness = g.weakness;
+          r.ev.aiReviewed = true;
+        }
+      });
+    }
+  }
+
+  baseReports.sort((a,b) => b.ev.overall - a.ev.overall);
+  wrap.innerHTML = `
+    <div class="panel">
+      <div class="sec-title" style="margin-bottom:10px">🧠 Senior Analyst Squad Grades ${baseReports[0]?.ev.aiReviewed ? '(Powered by Gemini AI)' : '(Offline Mode)'}</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:9px">
+        ${baseReports.map((r,idx) => `
+          <div style="background:rgba(255,255,255,0.04);border:1px solid var(--card-border);border-top:3px solid ${r.t.color};border-radius:12px;padding:11px">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <b>#${idx+1} ${r.t.name}</b>
+              <span class="tag tag-ovr">${r.ev.overall}/10</span>
+            </div>
+            <div style="font-size:11px;color:var(--muted);margin:4px 0">XI Avg OVR: ${r.ev.avgOvr} • Squad: ${r.t.squad.length}/25 • Purse: ${fmtCr(r.t.purse)}</div>
+            <div class="sub-bars">
+              <div class="sub-bar"><span>🏏 Bat</span><b>${r.ev.bat}</b></div>
+              <div class="sub-bar"><span>🎯 Bowl</span><b>${r.ev.bowl}</b></div>
+              <div class="sub-bar"><span>⚡ AR</span><b>${r.ev.ar}</b></div>
+              <div class="sub-bar"><span>⚖️ Bal</span><b>${r.ev.bal}</b></div>
+            </div>
+            <div style="font-size:11.5px;color:#6ee7b7;margin-top:4px">✓ ${r.ev.strength}</div>
+            <div style="font-size:11.5px;color:#fca5a5;margin-top:2px">✕ ${r.ev.weakness}</div>
+          </div>
+        `).join('')}
+      </div>
+
+    </div>`;
+}
+
+// ==================== MATCH-BY-MATCH SEASON ENGINE + AUTOMATIC OVERSEAS-AWARE INJURIES ====================
+function buildBalancedIPLSchedule(teamIds){
+  // Circle-method Round-Robin for 10 teams: 9 rounds x 5 matches = 45 matches
+  // Every team plays EXACTLY ONCE per 5-match round!
+  const t = shuffleArr(teamIds);
+  const rounds = [];
+  const rot = t.slice(1);
+  for (let r = 0; r < 9; r++) {
+    const roundMatches = [];
+    const pair0 = r % 2 === 0 ? [t[0], rot[0]] : [rot[0], t[0]];
+    roundMatches.push(pair0);
+    for (let i = 1; i < 5; i++) {
+      const a = rot[i], b = rot[9 - i];
+      roundMatches.push((r + i) % 2 === 0 ? [a, b] : [b, a]);
+    }
+    rounds.push(roundMatches);
+    rot.unshift(rot.pop());
+  }
+
+  // 5 additional balanced rounds (25 matches) = 14 rounds x 5 matches = 70 matches total
+  // Uses reverse fixtures from 5 distinct rounds so every team still plays EXACTLY ONCE per round!
+  const extraIdx = shuffleArr([0, 1, 2, 3, 4, 5, 6, 7, 8]).slice(0, 5);
+  extraIdx.forEach(ri => {
+    rounds.push(rounds[ri].map(([h, a]) => [a, h]));
+  });
+
+  // Shuffle round order and order matches inside each round so NO team plays back-to-back across round boundaries
+  const shufRounds = shuffleArr(rounds);
+  const finalSchedule = [];
+  let lastMatchTeams = new Set();
+
+  shufRounds.forEach(rd => {
+    const pool = shuffleArr(rd);
+    // Pick first match of this round that shares ZERO teams with the last match of previous round
+    const safeIdx = pool.findIndex(([a, b]) => !lastMatchTeams.has(a) && !lastMatchTeams.has(b));
+    if (safeIdx > 0) {
+      const [picked] = pool.splice(safeIdx, 1);
+      pool.unshift(picked);
+    }
+    pool.forEach(m => finalSchedule.push(m));
+    const lastM = pool[pool.length - 1];
+    lastMatchTeams = new Set(lastM);
+  });
+
+  return finalSchedule;
+}
+
+function rebalanceRemainingSchedule(){
+  const s = state.seasonData;
+  if (!s || !Array.isArray(s.schedule) || s.nextIndex >= 70) return;
+  const played = s.schedule.slice(0, s.nextIndex);
+  const rem = s.schedule.slice(s.nextIndex);
+  if (rem.length <= 2) return;
+
+  // Greedy anti-back-to-back & lowest-games-played scheduler for remaining fixtures
+  const gamesPlayed = {};
+  state.teams.forEach(t => { gamesPlayed[t.id] = s.table[t.id]?.m || 0; });
+  const lastSeen = {};
+  state.teams.forEach(t => { lastSeen[t.id] = -10; });
+  played.forEach(([a, b], idx) => { lastSeen[a] = idx; lastSeen[b] = idx; });
+
+  const reordered = [];
+  const pool = [...rem];
+  let curIdx = played.length;
+
+  while (pool.length) {
+    let bestI = 0, bestScore = -999999;
+    for (let i = 0; i < pool.length; i++) {
+      const [a, b] = pool[i];
+      const gapA = curIdx - lastSeen[a];
+      const gapB = curIdx - lastSeen[b];
+      const minGap = Math.min(gapA, gapB);
+      // Heavy penalty if either team played in the immediately preceding match (gap === 1)
+      let score = minGap === 1 ? -10000 : minGap === 2 ? -200 : minGap * 15;
+      // Prefer teams with fewer matches played so far so standings stay synchronized
+      score -= (gamesPlayed[a] + gamesPlayed[b]) * 18;
+      if (score > bestScore) { bestScore = score; bestI = i; }
+    }
+    const [picked] = pool.splice(bestI, 1);
+    reordered.push(picked);
+    lastSeen[picked[0]] = curIdx;
+    lastSeen[picked[1]] = curIdx;
+    gamesPlayed[picked[0]]++;
+    gamesPlayed[picked[1]]++;
+    curIdx++;
+  }
+
+  s.schedule = [...played, ...reordered];
+  s.scheduleBalanced = true;
+}
+
+function fixCurrentSeasonSchedule(){
+  ensureSeasonInitialized();
+  rebalanceRemainingSchedule();
+  saveState();
+  renderSeason();
+  renderScheduleDrawer();
+  showToast('📅 Remaining schedule rebalanced — zero back-to-back matches!');
+}
+
+function openScheduleDrawer(){
+  ensureSeasonInitialized();
+  const sel = document.getElementById('schedTeamFilter');
+  if (sel && sel.options.length <= 1) {
+    TEAMS_META.forEach(t => sel.add(new Option(`${t.id} — ${t.name}`, t.id)));
+  }
+  renderScheduleDrawer();
+  document.getElementById('scheduleBackdrop').classList.add('open');
+}
+
+function renderScheduleDrawer(){
+  const wrap = document.getElementById('scheduleListWrap');
+  if (!wrap || !state.seasonData) return;
+  const s = state.seasonData;
+  const filter = document.getElementById('schedTeamFilter')?.value || 'ALL';
+  let html = '';
+  s.schedule.forEach(([h, a], idx) => {
+    if (filter !== 'ALL' && h !== filter && a !== filter) return;
+    const roundNum = Math.floor(idx / 5) + 1;
+    const isDone = idx < s.nextIndex;
+    const isNext = idx === s.nextIndex;
+    const mRes = isDone ? s.matches[idx] : null;
+    const hObj = state.teams.find(x => x.id === h);
+    const aObj = state.teams.find(x => x.id === a);
+    html += `
+      <div class="pool-row" ${isDone && mRes ? `onclick="closeDrawers();openMatchScorecard(${mRes.idx})" style="cursor:pointer;opacity:0.85"` : isNext ? 'style="border-color:var(--gold);background:var(--gold-dim)"' : ''}>
+        <div class="p-info">
+          <div class="p-name">M${idx+1} <small style="color:var(--muted)">(R${roundNum})</small>: <span style="color:${hObj?.color||'var(--text)'}">${h}</span> vs <span style="color:${aObj?.color||'var(--text)'}">${a}</span></div>
+          <div class="p-sub">${isDone && mRes ? `✅ ${mRes.winner} won (${mRes.margin})` : isNext ? `🔥 UPCOMING NEXT • 📍 ${hObj?.home.split(' (')[0]}` : `📍 ${hObj?.home.split(' (')[0]}`}</div>
+        </div>
+        <span class="pill ${isDone?'pill-live':isNext?'pill-warn':''}" style="font-size:9.5px">${isDone?'DONE':isNext?'NEXT':'SCHED'}</span>
+      </div>`;
+  });
+  wrap.innerHTML = html || '<div style="text-align:center;padding:20px;color:var(--muted)">No fixtures found.</div>';
+}
+
+function ensureSeasonInitialized(){
+  const minSquad = Math.min(...state.teams.map(t => t.squad.length));
+  if (minSquad < 11) {
+    showToast('Auto-completing squads before starting season...');
+    quickSimRestAuction();
+  }
+  if (state.seasonData && state.seasonData.schedule && !state.seasonData.finished) {
+    if (!state.seasonData.scheduleBalanced) {
+      rebalanceRemainingSchedule();
+      saveState();
+    }
+    return;
+  }
+
+  const ids = state.teams.map(t => t.id);
+  const balancedFixtures = buildBalancedIPLSchedule(ids);
+
+  const pStats = {};
+  state.players.forEach(p => { pStats[p.id] = { runs:0, wkts:0, catches:0, impact:0 }; });
+
+  const table = {};
+  state.teams.forEach(t => {
+    const ev = teamCoachEval(t);
+    table[t.id] = { id:t.id, name:t.name, color:t.color, m:0, w:0, l:0, pts:0, rf:0, of:0, ra:0, oa:0, nrr:0, str:ev.overall, form:[] };
+  });
+
+  state.seasonData = {
+    schedule: balancedFixtures,
+    scheduleBalanced: true,
+    nextIndex: 0, // 0..69 = League, 70 = Q1, 71 = Elim, 72 = Q2, 73 = Final
+    pStats,
+    table,
+    standings: Object.values(table),
+    matches: [],
+    playoffWinners: {},
+    bestCatch: { player:'Ravindra Jadeja', team:'CSK', desc:'Full-stretch diving one-hander at backward point!', score:0 },
+    champId: null,
+    runnerId: null,
+    awards: null,
+    finished: false
+  };
+}
+
+function triggerAutoMatchInjury(teamIds, matchLabel){
+  // ~16% chance per match of a realistic match injury with AUTOMATIC replacement from Unsold Pool
+  if (Math.random() > 0.16) return null;
+  const tid = teamIds[Math.floor(Math.random() * teamIds.length)];
+  const t = state.teams.find(x => x.id === tid);
+  if (!t || t.squad.length < 12) return null;
+
+  const { xi } = computePlayingXII(t);
+  const injPool = xi.length ? xi.filter(p => !p.injured) : t.squad.map(id=>state.players[id]).filter(p=>p&&!p.injured);
+  if (!injPool.length) return null;
+  const pOut = injPool[Math.floor(Math.random() * injPool.length)];
+
+  const c = teamRoleCounts(t);
+  const unsoldPool = state.players.filter(p => p.status === 'UNSOLD' || p.status === 'AVAIL');
+  if (!unsoldPool.length) return null;
+
+  // STRICT IPL OVERSEAS INJURY RULE:
+  // If an Overseas player is injured -> replace with an Overseas player (or Indian if none left)
+  // If an Indian player is injured -> MUST replace with an Indian player (especially when OS slots are 8/8!)
+  const allowOS = pOut.os || c.OS < 8;
+  const preferOS = pOut.os;
+
+  let rep = unsoldPool
+    .filter(u => u.role === pOut.role && (preferOS ? u.os : !u.os))
+    .sort((a,b) => b.ovr - a.ovr)[0];
+  if (!rep && preferOS) {
+    rep = unsoldPool.filter(u => u.os).sort((a,b) => b.ovr - a.ovr)[0];
+  }
+  if (!rep) {
+    rep = unsoldPool.filter(u => !u.os && u.role === pOut.role).sort((a,b) => b.ovr - a.ovr)[0]
+       || unsoldPool.find(u => !u.os || allowOS);
+  }
+  if (!rep) return null;
+
+  const reasons = ['hamstring pull','side strain','bowling finger fracture','ankle sprain','back spasm'];
+  const reason = reasons[Math.floor(Math.random() * reasons.length)];
+
+  // Execute automatic swap cleanly (updates customXI too if injured player was in it!)
+  t.squad = t.squad.filter(id => id !== pOut.id);
+  pOut.injured = true; pOut.status = 'INJURED'; pOut.soldTo = null;
+  t.squad.push(rep.id);
+  rep.status = 'SOLD'; rep.soldTo = t.id; rep.soldPrice = rep.base;
+  if (Array.isArray(t.customXI)) {
+    t.customXI = t.customXI.map(id => id === pOut.id ? rep.id : id);
+  }
+  if (t.customImpact === pOut.id) t.customImpact = rep.id;
+
+  const log = `🚑 ${matchLabel}: ${t.id}'s ${pOut.name} (${pOut.os?'OS':'IND'}) ruled out (${reason}) → Auto-replaced from Unsold Pool by ${rep.name} (${rep.os?'OS':'IND'}, ${roleLabel(rep.role)}, OVR ${rep.ovr}).`;
+  state.injuryHistory.unshift(log);
+  pushTicker(log);
+  return { team:t.id, out:pOut.name, outOS:pOut.os, inName:rep.name, inOS:rep.os, reason };
+}
+
+async function runOneSeasonMatch(useGeminiLine=true, tossInfo=null){
+  ensureSeasonInitialized();
+  const s = state.seasonData;
+  if (s.finished) { showToast('Season complete! Reset to play a new auction.'); return null; }
+
+  let t1Id, t2Id, label;
+  const idx = s.nextIndex;
+  if (idx < 70) {
+    [t1Id, t2Id] = s.schedule[idx];
+    label = `Match ${idx + 1}`;
+  } else if (idx === 70) {
+    t1Id = s.standings[0].id; t2Id = s.standings[1].id; label = 'Qualifier 1';
+  } else if (idx === 71) {
+    t1Id = s.standings[2].id; t2Id = s.standings[3].id; label = 'Eliminator';
+  } else if (idx === 72) {
+    t1Id = s.playoffWinners.q1L; t2Id = s.playoffWinners.elW; label = 'Qualifier 2';
+  } else if (idx === 73) {
+    t1Id = s.playoffWinners.q1W; t2Id = s.playoffWinners.q2W; label = 'GRAND FINAL';
+  }
+
+  if (tossInfo && tossInfo.batFirstId === t2Id) {
+    [t1Id, t2Id] = [t2Id, t1Id];
+  }
+  const dewBoost = (tossInfo && tossInfo.dew && tossInfo.dew.includes('Heavy')) ? 7 : 0;
+  const teamAObj = state.teams.find(x => x.id === t1Id);
+  const teamBObj = state.teams.find(x => x.id === t2Id);
+  const xiiA = computePlayingXII(teamAObj, teamAObj.home);
+  const xiiB = computePlayingXII(teamBObj, teamAObj.home);
+  const xiA = [...xiiA.xi];
+  const xiB = [...xiiB.xi];
+  const impA = xiiA.impact;
+  const impB = xiiB.impact;
+  const A = s.table[t1Id], B = s.table[t2Id];
+  A.str = teamCoachEval(teamAObj).overall;
+  B.str = teamCoachEval(teamBObj).overall;
+
+  // PITCH-AWARE MATCH ENGINE (Home ground of Team A dictates par score!)
+  const homeVenue = teamAObj.home.toLowerCase();
+  let parBase = 165;
+  if (homeVenue.includes('chinnaswamy') || homeVenue.includes('uppal') || homeVenue.includes('wankhede')) parBase = 186;
+  else if (homeVenue.includes('chepauk') || homeVenue.includes('ekana')) parBase = 148;
+  else if (homeVenue.includes('jaipur') || homeVenue.includes('ahmedabad')) parBase = 168;
+
+  ensurePlayerSplitStats(state.players);
+  const calcPhaseScore = (batXI, bowlXI, venueL, isChasingDew) => {
+    const spinTrack = venueL.includes('chepauk') || venueL.includes('ekana') || venueL.includes('jaipur');
+    const flatTrack = venueL.includes('chinnaswamy') || venueL.includes('uppal') || venueL.includes('wankhede');
+
+    // Phase 1: Powerplay (Overs 1-6) — Openers & Top-3 Bat/SR vs PP Pacers
+    const top3 = batXI.slice(0, 3);
+    const ppBat = top3.reduce((s,p)=>s + ((p.bat||p.ovr)*0.6 + (p.sr||135)*0.25), 0) / Math.max(1, top3.length);
+    const ppBowlArr = bowlXI.filter(p => p.phase && (p.phase.includes('PP') || p.phase.includes('Express'))).slice(0,2);
+    const ppBowl = (ppBowlArr.length ? ppBowlArr : bowlXI.filter(p=>p.role==='BW').slice(0,2)).reduce((s,p)=>s + (p.bowl||p.ovr), 0) / Math.max(1, ppBowlArr.length || 2);
+    const hasLHBTop = top3.some(p => p.batHand === 'L') && top3.some(p => p.batHand === 'R');
+    const hasLAFPP = bowlXI.some(p => p.bowlStyle === 'LAF');
+    const ppRuns = Math.round(47 + (ppBat - ppBowl) * 0.35 + (hasLHBTop ? 4 : 0) - (hasLAFPP ? 3 : 0) + (flatTrack ? 7 : spinTrack ? -4 : 0) + (Math.random() * 18 - 8));
+
+    // Phase 2: Middle Overs (Overs 7-15) — Anchors/Enforcers vs Spinners
+    const midBatArr = batXI.slice(2, 6);
+    const midBat = midBatArr.reduce((s,p)=>s + (p.bat||p.ovr), 0) / Math.max(1, midBatArr.length);
+    const spinners = bowlXI.filter(p => isSpinner(p));
+    const midBowl = spinners.length ? (spinners.reduce((s,p)=>s + (p.bowl||p.ovr), 0) / spinners.length) : 72;
+    const spinGripPenalty = spinTrack && spinners.length >= 2 ? -9 : 0;
+    const midRuns = Math.round(70 + (midBat - midBowl) * 0.42 + spinGripPenalty + (flatTrack ? 8 : 0) + (Math.random() * 22 - 10));
+
+    // Phase 3: Death Overs (Overs 16-20) — Finishers (SR) vs Death Pace (Econ)
+    const finArr = batXI.slice(4, 8);
+    const finPower = finArr.reduce((s,p)=>s + ((p.bat||p.ovr)*0.5 + (p.sr||135)*0.32), 0) / Math.max(1, finArr.length);
+    const deathB = bowlXI.filter(p => p.phase === 'Death Pace' || (p.role === 'BW' && (p.econ || 8.5) <= 7.8));
+    const deathBowl = deathB.length ? (deathB.reduce((s,p)=>s + (p.bowl||p.ovr), 0) / deathB.length) : 73;
+    const deathRuns = Math.round(48 + (finPower - deathBowl) * 0.38 + (isChasingDew ? 6 : 0) + (flatTrack ? 6 : spinTrack ? -5 : 0) + (Math.random() * 20 - 9));
+
+    return Math.max(115, ppRuns + midRuns + deathRuns);
+  };
+
+  const capBonusA = teamAObj.captainId ? 3 : 0;
+  const capBonusB = teamBObj.captainId ? 3 : 0;
+  const scoreA = calcPhaseScore(xiA, xiB, homeVenue, false) + capBonusA;
+  const wktsA = Math.min(10, Math.floor(3 + Math.random() * 6));
+
+  // REAL IMPACT PLAYER SUBSTITUTION FOR INNINGS 2!
+  const xiBChase = [...xiB];
+  const xiADefend = [...xiA];
+  const impactNotes = [];
+  if (impB && scoreA >= 170 && (impB.role === 'B' || impB.role === 'WK' || impB.role === 'AR')) {
+    const weakIdx = xiBChase.map((p, i) => ({ p, i })).filter(x => x.p.role === 'BW').sort((a,b) => (a.p.bat||30) - (b.p.bat||30))[0]?.i;
+    if (weakIdx !== undefined) {
+      impactNotes.push(`${B.id} subbed in ⚡${impB.name} for ${xiBChase[weakIdx].name}`);
+      xiBChase[weakIdx] = impB;
+    }
+  }
+  if (impA && (impA.role === 'BW' || impA.role === 'AR')) {
+    const pureBatIdx = xiADefend.map((p, i) => ({ p, i })).filter(x => x.p.role === 'B').sort((a,b) => (a.p.bowl||20) - (b.p.bowl||20))[0]?.i;
+    if (pureBatIdx !== undefined) {
+      impactNotes.push(`${A.id} subbed in ⚡${impA.name} for ${xiADefend[pureBatIdx].name}`);
+      xiADefend[pureBatIdx] = impA;
+    }
+  }
+
+  const rawB = calcPhaseScore(xiBChase, xiADefend, homeVenue, dewBoost > 0) + capBonusB;
+
+  // ~6% chance of a dramatic TIED MATCH -> SUPER OVER!
+  const isSuperOver = Math.random() < 0.06 || rawB === scoreA;
+  let bWins = rawB > scoreA;
+  let scoreB = isSuperOver ? scoreA : (bWins ? (scoreA + 1 + Math.floor(Math.random() * 6)) : Math.min(scoreA - 1, rawB));
+  const wktsB = isSuperOver ? Math.min(9, Math.floor(5 + Math.random() * 4)) : (bWins ? Math.min(8, Math.floor(2 + Math.random() * 6)) : Math.min(10, Math.floor(5 + Math.random() * 5)));
+  const ovB = (isSuperOver || !bWins) ? 20.0 : +(17.1 + Math.random() * 2.5).toFixed(1);
+
+  let superOverData = null;
+  if (isSuperOver) {
+    const soA = Math.floor(9 + Math.random() * 14);
+    let soB = Math.floor(9 + Math.random() * 14);
+    if (soB === soA) soB += 2;
+    bWins = soB > soA;
+    superOverData = { t1:A.id, r1:soA, w1:Math.min(2, Math.floor(Math.random()*2)), t2:B.id, r2:soB, w2:Math.min(2, Math.floor(Math.random()*2)), winner: bWins ? B.id : A.id };
+  }
+
+  function buildInnings(batTeamId, batXI, totRuns, wktsLost, oversUsed, bowlTeamId, bowlXI){
+    const batters = batXI.filter(p => p.role==='B'||p.role==='WK'||p.role==='AR');
+    const useBat = (batters.length >= 6 ? batters : batXI).slice(0, 7);
+    const weights = useBat.map((p, i) => {
+      const roleW = p.role==='B' ? 1.24 : p.role==='WK' ? 1.18 : 0.86;
+      const posW = i < 2 ? 1.25 : i < 4 ? 1.12 : i < 6 ? 0.90 : 0.65;
+      return roleW * posW * (0.65 + Math.random() * 0.70) * (p.ovr / 85);
+    });
+    const wSum = weights.reduce((a,b)=>a+b, 0) || 1;
+    const extras = Math.max(4, Math.min(18, Math.round(totRuns * 0.06)));
+    const batRunsPool = Math.max(20, totRuns - extras);
+    const totalBalls = Math.round(Math.floor(oversUsed) * 6 + Math.round((oversUsed % 1) * 10));
+    let ballsLeft = totalBalls;
+
+    const batCard = useBat.map((p, i) => {
+      const isLast = i === useBat.length - 1;
+      const r = isLast ? Math.max(0, batRunsPool - useBat.slice(0,-1).reduce((acc,_,k)=>acc + Math.round((weights[k]/wSum)*batRunsPool), 0))
+                       : Math.round((weights[i] / wSum) * batRunsPool);
+      const srTarget = (p.sr || (122 + (p.ovr - 72) * 1.15)) + (Math.random() * 22 - 11);
+      const b = isLast ? Math.max(1, ballsLeft) : Math.max(2, Math.min(ballsLeft - (useBat.length - 1 - i) * 2, Math.round((r / Math.max(90, srTarget)) * 100)));
+      ballsLeft = Math.max(1, ballsLeft - b);
+      const sixes = r >= 12 ? Math.min(Math.floor(r / 18), Math.floor(Math.random() * (Math.floor(r/14) + 2))) : 0;
+      const remAfterSix = Math.max(0, r - sixes * 6);
+      const fours = remAfterSix >= 8 ? Math.min(Math.floor(remAfterSix / 8), Math.floor(Math.random() * (Math.floor(remAfterSix/7) + 2))) : 0;
+      const out = i < wktsLost;
+      s.pStats[p.id].runs += r;
+      s.pStats[p.id].impact += r * 1.1;
+      return { name:p.name, r, b, f4:fours, s6:sixes, sr:((r/Math.max(1,b))*100).toFixed(1), out };
+    });
+
+    // Realistic 5-6 bowler rotation totaling exact oversUsed (max 4 overs each)
+    const specBowlers = bowlXI.filter(p => p.role==='BW');
+    const arBowlers = bowlXI.filter(p => p.role==='AR');
+    const orderedBowlers = [...specBowlers, ...arBowlers];
+    const useBowl = (orderedBowlers.length >= 5 ? orderedBowlers : bowlXI).slice(0, 6);
+    const bowlCard = useBowl.map(b => ({ id:b.id, name:b.name, ov:0, r:0, w:0 }));
+
+    let fullOversTarget = Math.floor(oversUsed);
+    const partBall = Math.round((oversUsed - fullOversTarget) * 10);
+    // Give top 4 bowlers 4 overs each first if overs allow, remaining to 5th/6th bowler
+    for (let i = 0; i < bowlCard.length && fullOversTarget > 0; i++) {
+      const capOv = i < 4 ? 4 : 2;
+      const take = Math.min(capOv, fullOversTarget);
+      bowlCard[i].ov = take;
+      fullOversTarget -= take;
+    }
+    if (partBall > 0 && bowlCard.length > 0) {
+      const targetIdx = bowlCard.findIndex(x => x.ov > 0 && x.ov < 4);
+      const bIdx = targetIdx !== -1 ? targetIdx : bowlCard.length - 1;
+      bowlCard[bIdx].ov = +(bowlCard[bIdx].ov + partBall / 10).toFixed(1);
+    }
+
+    const activeBowlers = bowlCard.filter(x => x.ov > 0);
+    for (let w = 0; w < wktsLost && activeBowlers.length > 0; w++) {
+      // Pick an active bowler who currently has < 4 wickets so wicket figures stay realistic
+      const eligible = activeBowlers.filter(x => x.w < 4);
+      const pool = eligible.length ? eligible : activeBowlers;
+      const b = pool[Math.floor(Math.random() * pool.length)];
+      if (b) { b.w += 1; s.pStats[b.id].wkts += 1; s.pStats[b.id].impact += 25; }
+      const f = bowlXI[Math.floor(Math.random() * bowlXI.length)];
+      if (f && Math.random() < 0.45) {
+        s.pStats[f.id].catches += 1; s.pStats[f.id].impact += 8;
+        const sc = Math.random() * 100 + (f.ovr * 0.2);
+        if (sc > s.bestCatch.score) {
+          const spots = ['flying one-handed stunner at long-on','boundary-rope relay juggle at deep mid-wicket','screaming full-dive grab at backward point','running over-the-shoulder catch at third man'];
+          s.bestCatch = { player:f.name, team:bowlTeamId, desc:`${spots[Math.floor(Math.random()*spots.length)]} vs ${batTeamId} (${label})`, score:sc };
+        }
+      }
+    }
+
+    // Distribute runs proportionally to overs bowled so every bowler's runs & economy look natural
+    let runsRem = Math.max(activeBowlers.length * 4, totRuns - extras);
+    const totalOvFloat = activeBowlers.reduce((sum, x) => sum + x.ov, 0) || 1;
+    activeBowlers.forEach((bc, i) => {
+      if (i === activeBowlers.length - 1) {
+        bc.r = Math.max(4, runsRem);
+      } else {
+        const share = bc.ov / totalOvFloat;
+        const jitter = 0.84 + Math.random() * 0.32;
+        const rc = Math.max(4, Math.min(runsRem - (activeBowlers.length - 1 - i) * 4, Math.round(totRuns * share * jitter)));
+        bc.r = rc;
+        runsRem -= rc;
+      }
+    });
+    return { team:batTeamId, score:`${totRuns}/${wktsLost}`, overs:oversUsed.toFixed(1), batCard, bowlCard: activeBowlers };
+  }
+
+  const inn1 = buildInnings(A.id, xiA, scoreA, wktsA, 20.0, B.id, xiB);
+  const inn2 = buildInnings(B.id, xiBChase, scoreB, wktsB, ovB, A.id, xiADefend);
+
+  const winner = bWins ? B : A;
+  const margin = superOverData ? `Super Over (${superOverData.t1} ${superOverData.r1}/${superOverData.w1} vs ${superOverData.t2} ${superOverData.r2}/${superOverData.w2})` : (bWins ? `${10 - wktsB} wickets` : `${scoreA - scoreB} runs`);
+  const winBat = [...(bWins ? inn2.batCard : inn1.batCard)].sort((x,y)=>y.r-x.r)[0];
+  const winBowl = [...(bWins ? inn1.bowlCard : inn2.bowlCard)].sort((x,y)=>y.w-x.w || x.r-y.r)[0];
+  const potm = (winBowl && winBowl.w >= 3) ? `${winBowl.name} (${winBowl.w}/${winBowl.r})` : (winBat ? `${winBat.name} (${winBat.r} off ${winBat.b})` : winner.id);
+
+  // Automatic Injury check (strict OS->OS, IND->IND rule)
+  const injury = idx < 73 ? triggerAutoMatchInjury([t1Id, t2Id], label) : null;
+  const injNote = injury ? `🚑 Injured: ${injury.out} (${injury.team}, ${injury.reason}) → Replaced by ${injury.inName}` : '✅ No injuries';
+
+  let oneLiner = `${winner.id} beat ${bWins?A.id:B.id} by ${margin} — POTM: ${potm}. ${injNote}`;
+  if (useGeminiLine && getSavedApiKey()) {
+    const mPrompt = `IPL ${label}: ${A.id} (${scoreA}/${wktsA}) vs ${B.id} (${scoreB}/${wktsB} in ${ovB} ov) at ${teamAObj.home}.
+Winner: ${winner.id} by ${margin}. Top performances: ${winBat?.name} ${winBat?.r}(${winBat?.b}), ${winBowl?.name} ${winBowl?.w}/${winBowl?.r}.
+Injury update: ${injNote}.
+Write ONE punchy broadcast-style single line (max 28 words) summarizing how ${winner.id} won, naming Player of the Match (${potm}), and noting the injury status (${injury ? `${injury.out} injured, replaced by ${injury.inName}` : 'no injuries'}).
+Return ONLY valid JSON: {"line": "..."}`;
+    const aiLine = await callGeminiJSON(mPrompt, 0.8);
+    if (aiLine && aiLine.line) oneLiner = aiLine.line;
+  }
+
+  // Record recent player form (last 3 matches)
+  if (!state.playerForm) state.playerForm = {};
+  const logForm = (pid, pts) => {
+    if (!state.playerForm[pid]) state.playerForm[pid] = [];
+    state.playerForm[pid].push(pts);
+    if (state.playerForm[pid].length > 3) state.playerForm[pid].shift();
+  };
+  [...inn1.batCard, ...inn2.batCard].forEach(b => {
+    const pObj = state.players.find(x => x.name === b.name);
+    if (pObj) logForm(pObj.id, b.r);
+  });
+  [...inn1.bowlCard, ...inn2.bowlCard].forEach(bw => { logForm(bw.id, bw.w * 24); });
+
+  const mObj = { idx: s.matches.length, label, venue:teamAObj.home.split(' (')[0], t1:A.id, s1:`${scoreA}/${wktsA}`, t2:B.id, s2:`${scoreB}/${wktsB}`, winner:winner.id, margin, potm, injury, superOver:superOverData, impactNotes, oneLiner, inn1, inn2 };
+  s.matches.push(mObj);
+
+  if (idx < 70) {
+    A.m++; B.m++;
+    A.rf += scoreA; A.of += 20; A.ra += scoreB; A.oa += ovB;
+    B.rf += scoreB; B.of += ovB; B.ra += scoreA; B.oa += 20;
+    if (!A.form) A.form = []; if (!B.form) B.form = [];
+    if (winner.id === A.id) { A.w++; A.pts += 2; B.l++; A.form.push('W'); B.form.push('L'); }
+    else { B.w++; B.pts += 2; A.l++; B.form.push('W'); A.form.push('L'); }
+    if (A.form.length > 5) A.form.shift();
+    if (B.form.length > 5) B.form.shift();
+    s.standings = Object.values(s.table).map(t => {
+      t.nrr = +((t.rf / Math.max(1, t.of)) - (t.ra / Math.max(1, t.oa))).toFixed(3);
+      return t;
+    }).sort((a,b) => b.pts - a.pts || b.nrr - a.nrr);
+  } else if (idx === 70) {
+    s.playoffWinners.q1W = winner.id;
+    s.playoffWinners.q1L = winner.id === t1Id ? t2Id : t1Id;
+  } else if (idx === 71) {
+    s.playoffWinners.elW = winner.id;
+  } else if (idx === 72) {
+    s.playoffWinners.q2W = winner.id;
+  } else if (idx === 73) {
+    s.champId = winner.id;
+    s.runnerId = winner.id === t1Id ? t2Id : t1Id;
+    s.finished = true;
+    finalizeSeasonAwards();
+  }
+
+  s.nextIndex++;
+  return mObj;
+}
+
+function finalizeSeasonAwards(){
+  const s = state.seasonData;
+  const allPlayed = state.players.filter(p => p.status === 'SOLD');
+  const orange = [...allPlayed].sort((a,b) => s.pStats[b.id].runs - s.pStats[a.id].runs)[0];
+  const purple = [...allPlayed].sort((a,b) => s.pStats[b.id].wkts - s.pStats[a.id].wkts)[0];
+  const allRounders = allPlayed.filter(p => p.role === 'AR' && s.pStats[p.id].runs >= 100 && s.pStats[p.id].wkts >= 5);
+  const brown = [...(allRounders.length ? allRounders : allPlayed.filter(p=>p.role==='AR'))].sort((a,b) =>
+    (s.pStats[b.id].runs + s.pStats[b.id].wkts * 26) - (s.pStats[a.id].runs + s.pStats[a.id].wkts * 26)
+  )[0] || orange;
+  const mvp = [...allPlayed].sort((a,b) => s.pStats[b.id].impact - s.pStats[a.id].impact)[0];
+
+  s.awards = {
+    orange: { name:orange.name, team:orange.soldTo, stat:`${s.pStats[orange.id].runs} Runs` },
+    purple: { name:purple.name, team:purple.soldTo, stat:`${s.pStats[purple.id].wkts} Wickets` },
+    brown:  { name:brown.name, team:brown.soldTo, stat:`${s.pStats[brown.id].runs} Runs & ${s.pStats[brown.id].wkts} Wkts` },
+    mvp:    { name:mvp.name, team:mvp.soldTo, stat:`${Math.round(s.pStats[mvp.id].impact)} MVP Pts (${s.pStats[mvp.id].runs}R, ${s.pStats[mvp.id].wkts}W)` }
+  };
+  sfxGavel();
+  fireConfetti(s.table[s.champId]?.color || '#00e5ff');
+  setTimeout(()=>sfxCrowdRoar(1.8), 150);
+  speakMale(`The IPL Champions are ${s.table[s.champId].name}!`);
+  pushTicker(`🏆 IPL CHAMPIONS: ${s.champId}! Orange Cap: ${orange.name} • Purple Cap: ${purple.name} • Brown Cap: ${brown.name}`);
+}
+
+let pendingPreMatch = null;
+
+function getUpcomingFixtureInfo(){
+  ensureSeasonInitialized();
+  const s = state.seasonData;
+  if (s.finished) return null;
+  let t1Id, t2Id, label;
+  const idx = s.nextIndex;
+  if (idx < 70) { [t1Id, t2Id] = s.schedule[idx]; label = `Match ${idx + 1}`; }
+  else if (idx === 70) { t1Id = s.standings[0].id; t2Id = s.standings[1].id; label = 'Qualifier 1'; }
+  else if (idx === 71) { t1Id = s.standings[2].id; t2Id = s.standings[3].id; label = 'Eliminator'; }
+  else if (idx === 72) { t1Id = s.playoffWinners.q1L; t2Id = s.playoffWinners.elW; label = 'Qualifier 2'; }
+  else { t1Id = s.playoffWinners.q1W; t2Id = s.playoffWinners.q2W; label = 'GRAND FINAL'; }
+  const t1 = state.teams.find(x => x.id === t1Id);
+  const t2 = state.teams.find(x => x.id === t2Id);
+  return { label, t1Id, t2Id, t1, t2, pitch: t1 ? t1.home : 'Balanced IPL Surface' };
+}
+
+async function simulateNextMatch(){
+  await openPreMatchPreview('NORMAL');
+}
+
+async function openPreMatchPreview(mode='NORMAL'){
+  const fx = getUpcomingFixtureInfo();
+  if (!fx) { showToast('Season complete! Tap Start New Season to replay.'); return; }
+  pendingPreMatch = { ...fx, mode, pitchVerdict: '', tossWinner: fx.t1Id, decision: 'BOWL', batFirstId: fx.t2Id, dew: 'Light Dew' };
+  rollPreMatchToss(true);
+
+  document.getElementById('pmTitle').textContent = `${fx.label.toUpperCase()}: ${fx.t1Id} vs ${fx.t2Id}`;
+  document.getElementById('pmVenue').textContent = `Pitch: ${fx.pitch}`;
+  document.getElementById('btnConfirmStartMatch').textContent = mode === 'FINAL_OVER'
+    ? 'Confirm XIs & Start Final Over'
+    : 'Confirm XIs & Start Match';
+  document.getElementById('preMatchBackdrop').classList.add('open');
+  await analysePreMatchLineups(false);
+}
+
+async function analysePreMatchLineups(forceGemini=false){
+  if (!pendingPreMatch) return;
+  const { t1, t2, pitch, label } = pendingPreMatch;
+  const repEl = document.getElementById('pmPitchReport');
+  const startBtn = document.getElementById('btnConfirmStartMatch');
+
+  if (getSavedApiKey()) {
+    if (startBtn) startBtn.disabled = true;
+    repEl.innerHTML = `Analysing <b>${pitch}</b> and selecting pitch-suited Playing 12s for <b>${t1.id}</b> &amp; <b>${t2.id}</b>...`;
+    renderPreMatchLineups();
+
+    const prompt = `Match Pitch Analyst for ${label}: ${t1.name} (${t1.id}) vs ${t2.name} (${t2.id}) on ${pitch}.
+${t1.id} Squad:
+${formatSquadForGeminiPrompt(t1)}
+${t2.id} Squad:
+${formatSquadForGeminiPrompt(t2)}
+
+Pick Playing XI (11 unique IDs in batting order #1-#11) + 1 Impact Sub for BOTH teams:
+- Max 4 OS per XI; if 4 OS in XI, Impact Sub MUST be Indian (!os).
+- Keep bowlers in #8-#11 and top/middle batters in #1-#7.
+Return ONLY valid JSON:
+{"pitchReport": "1 sentence on pitch", "team1": {"xi": [11 ids], "impact": id, "captainId": id, "note": "1 line"}, "team2": {"xi": [11 ids], "impact": id, "captainId": id, "note": "1 line"}}`;
+    const aiRes = await callGeminiJSON(prompt, 0.35, 6500);
+    if (aiRes && aiRes.team1 && aiRes.team2) {
+      validateAndApplyGeminiXI(t1, aiRes.team1, pitch);
+      validateAndApplyGeminiXI(t2, aiRes.team2, pitch);
+      pendingPreMatch.pitchVerdict = aiRes.pitchReport || `Pitch-balanced XIs locked for ${pitch}.`;
+      repEl.innerHTML = `<b>Pitch Analysis (${pitch.split(' (')[0]}):</b> ${pendingPreMatch.pitchVerdict}`;
+    } else {
+      const fb1 = computePlayingXII(t1, pitch), fb2 = computePlayingXII(t2, pitch);
+      t1.customXI = fb1.xi.map(p=>p.id); t1.customImpact = fb1.impact?.id ?? null;
+      t2.customXI = fb2.xi.map(p=>p.id); t2.customImpact = fb2.impact?.id ?? null;
+      repEl.innerHTML = `<b>Pitch Analysis (${pitch}):</b> Pitch-suited Playing 12s ready. Review or edit before starting.`;
+    }
+    if (startBtn) startBtn.disabled = false;
+  } else {
+    const fb1 = computePlayingXII(t1, pitch), fb2 = computePlayingXII(t2, pitch);
+    t1.customXI = fb1.xi.map(p=>p.id); t1.customImpact = fb1.impact?.id ?? null;
+    t2.customXI = fb2.xi.map(p=>p.id); t2.customImpact = fb2.impact?.id ?? null;
+    repEl.innerHTML = `<b>Pitch Analysis (${pitch}):</b> Pitch-suited Playing 12s ready. Review or edit before starting.`;
+  }
+  renderPreMatchLineups();
+  saveState();
+}
+
+function renderPreMatchLineups(){
+  if (!pendingPreMatch) return;
+  const { t1, t2, pitch } = pendingPreMatch;
+  const wrap = document.getElementById('pmLineupsWrap');
+  if (!wrap) return;
+
+  const renderCard = (t) => {
+    const { xi, impact } = computePlayingXII(t, pitch);
+    const osXI = xi.filter(p => p.os).length;
+    return `
+      <div style="background:var(--input-bg);border:1.5px solid var(--card-border);border-top:4px solid ${t.color};border-radius:6px;padding:10px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+          <span style="display:inline-flex;align-items:center;gap:5px">${getTeamLogo(t.id, 20)}<b style="color:${t.color}">${t.id} PLAYING 12</b> <small style="color:var(--muted)">(OS ${osXI}/4)</small></span>
+          <button class="btn btn-sm" style="padding:3px 7px;font-size:9.5px" onclick="openXIEditor('${t.id}')">✏️ Edit</button>
+        </div>
+        ${t.xiNote ? `<div style="font-size:10.5px;color:var(--muted);font-style:italic;margin-bottom:6px">${t.xiNote}</div>` : ''}
+        <div style="display:flex;flex-direction:column;gap:3px;font-size:11px;font-family:'IBM Plex Mono',monospace">
+          ${xi.map((p,i)=>`<div style="display:flex;justify-content:space-between;padding:2px 4px;background:rgba(255,255,255,0.03);border-radius:2px"><span><b>${i+1}.</b> ${p.name}${t.captainId===p.id?' ©':''}${p.os?' ✈️':''}</span><span style="color:var(--muted)">${p.role}${isSpinner(p)?'•Sp':p.role==='BW'?'•Pc':''}</span></div>`).join('')}
+          ${impact ? `<div style="margin-top:4px;padding:4px 6px;background:var(--gold-dim);border:1px solid var(--gold);border-radius:3px;color:var(--gold);font-weight:700">⚡ 12th / Impact: ${impact.name} (${impact.os?'OS':'IND'} • ${impact.role})</div>` : ''}
+        </div>
+      </div>`;
+  };
+  wrap.innerHTML = renderCard(t1) + renderCard(t2);
+}
+
+
+function rollPreMatchToss(silent=false){
+  if (!pendingPreMatch) return;
+  const { t1Id, t2Id } = pendingPreMatch;
+  const dewOptions = ['No Dew (Dry Track)', 'Light Dew', 'Heavy Evening Dew'];
+  const dew = dewOptions[Math.floor(Math.random() * dewOptions.length)];
+  const tossWinner = Math.random() < 0.5 ? t1Id : t2Id;
+  const decision = dew.includes('Heavy') ? 'BOWL' : (Math.random() < 0.62 ? 'BOWL' : 'BAT');
+  const batFirstId = decision === 'BAT' ? tossWinner : (tossWinner === t1Id ? t2Id : t1Id);
+  pendingPreMatch.tossWinner = tossWinner;
+  pendingPreMatch.decision = decision;
+  pendingPreMatch.batFirstId = batFirstId;
+  pendingPreMatch.dew = dew;
+  renderPreMatchToss();
+  if (!silent) beep(760, 0.07, 'triangle', 0.1);
+}
+
+function swapPreMatchBatBowl(){
+  if (!pendingPreMatch) return;
+  pendingPreMatch.decision = pendingPreMatch.decision === 'BAT' ? 'BOWL' : 'BAT';
+  pendingPreMatch.batFirstId = pendingPreMatch.decision === 'BAT'
+    ? pendingPreMatch.tossWinner
+    : (pendingPreMatch.tossWinner === pendingPreMatch.t1Id ? pendingPreMatch.t2Id : pendingPreMatch.t1Id);
+  renderPreMatchToss();
+  beep(620, 0.06, 'sine', 0.08);
+}
+
+function renderPreMatchToss(){
+  const el = document.getElementById('pmTossText');
+  if (!el || !pendingPreMatch) return;
+  const { tossWinner, decision, batFirstId, dew } = pendingPreMatch;
+  el.innerHTML = `🪙 <b>${tossWinner}</b> won toss &amp; chose to <b>${decision}</b> (${batFirstId} bats 1st) • 💧 <b>${dew}</b>`;
+}
+
+async function confirmAndStartPreMatch(){
+  if (!pendingPreMatch) return;
+  const mode = pendingPreMatch.mode;
+  const tossInfo = { tossWinner: pendingPreMatch.tossWinner, decision: pendingPreMatch.decision, batFirstId: pendingPreMatch.batFirstId, dew: pendingPreMatch.dew };
+  pendingPreMatch = null;
+  document.getElementById('preMatchBackdrop').classList.remove('open');
+
+  if (mode === 'FINAL_OVER') {
+    launchFinalOverConfirmed();
+    return;
+  }
+  const btn = document.getElementById('btnNextMatch');
+  if (btn) btn.disabled = true;
+  const m = await runOneSeasonMatch(true, tossInfo);
+  if (btn) btn.disabled = false;
+  if (!m) return;
+  if (m.injury) showToast(`🚑 Injury: ${m.injury.out} (${m.injury.team}) → Replaced by ${m.injury.inName}!`);
+  sfxPaddle();
+  renderSeason();
+  renderSquads();
+  saveState();
+}
+
+async function simulateBatchMatches(count){
+  for (let i = 0; i < count; i++) {
+    const useAI = (i === count - 1); // Call Gemini on the final match of the batch for speed + rich summary
+    const m = await runOneSeasonMatch(useAI);
+    if (!m || state.seasonData.finished) break;
+  }
+  sfxTrade();
+  renderSeason();
+  renderSquads();
+  saveState();
+}
+
+async function simulateRestOfSeason(){
+  ensureSeasonInitialized();
+  while (!state.seasonData.finished) {
+    const isFinal = state.seasonData.nextIndex === 73;
+    await runOneSeasonMatch(isFinal);
+  }
+  renderSeason();
+  renderSquads();
+  saveState();
+}
+
+function renderNextFixturePreview(){
+  const box = document.getElementById('nextFixturePreview');
+  if (!box) return;
+  const s = state.seasonData;
+  if (!s) {
+    box.innerHTML = `<div class="next-fixture-card"><div style="font-size:12px;color:var(--muted)">Ready to start the 74-match IPL Season. Tap <b>▶ Next Match</b> to kick off Match 1 (with live Gemini broadcast verdict &amp; automatic injury tracking)!</div></div>`;
+    return;
+  }
+  if (s.finished) {
+    box.innerHTML = `<div class="next-fixture-card" style="text-align:center"><b style="color:var(--gold)">🏆 SEASON COMPLETE! ${s.champId} LIFTED THE TROPHY!</b></div>`;
+    return;
+  }
+  let t1Id, t2Id, label;
+  const idx = s.nextIndex;
+  if (idx < 70) { [t1Id, t2Id] = s.schedule[idx]; label = `Match ${idx+1} of 70`; }
+  else if (idx === 70) { t1Id = s.standings[0].id; t2Id = s.standings[1].id; label = 'Qualifier 1'; }
+  else if (idx === 71) { t1Id = s.standings[2].id; t2Id = s.standings[3].id; label = 'Eliminator'; }
+  else if (idx === 72) { t1Id = s.playoffWinners.q1L; t2Id = s.playoffWinners.elW; label = 'Qualifier 2'; }
+  else { t1Id = s.playoffWinners.q1W; t2Id = s.playoffWinners.q2W; label = '🏆 GRAND FINAL'; }
+
+  const tA = state.teams.find(x=>x.id===t1Id), tB = state.teams.find(x=>x.id===t2Id);
+  if (!tA || !tB) return;
+  const strA = teamCoachEval(tA).overall, strB = teamCoachEval(tB).overall;
+  const probA = Math.min(78, Math.max(22, Math.round(50 + (strA - strB) * 9)));
+  const probB = 100 - probA;
+
+  box.innerHTML = `
+    <div class="next-fixture-card">
+      <div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;font-weight:800;color:var(--gold)">
+        <span>UPCOMING: ${label.toUpperCase()}</span>
+        <span style="color:var(--muted)">📍 ${tA.home}</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;font-size:14px;font-weight:800">
+        <span style="color:${tA.color}">${tA.id} (${probA}%)</span>
+        <span style="font-size:11px;color:var(--muted)">PRE-MATCH WIN PROB</span>
+        <span style="color:${tB.color}">${tB.id} (${probB}%)</span>
+      </div>
+      <div class="win-prob-bar">
+        <div style="width:${probA}%;background:${tA.color}"></div>
+        <div style="width:${probB}%;background:${tB.color}"></div>
+      </div>
+    </div>`;
+}
+
+function renderSeason(){
+  renderInjuries();
+  renderNextFixturePreview();
+  const s = state.seasonData;
+  const prog = document.getElementById('seasonProgressPill');
+  const banner = document.getElementById('latestMatchBanner');
+  const loanWrap = document.getElementById('midSeasonLoanWrap');
+  const capsWrap = document.getElementById('liveCapsWrap');
+  const brkWrap = document.getElementById('playoffBracketWrap');
+  const ptWrap = document.getElementById('pointsTableWrap');
+  const mhWrap = document.getElementById('matchHistoryWrap');
+  const champWrap = document.getElementById('champAwardsWrap');
+
+  if (!s) {
+    if (prog) prog.textContent = 'READY • 0/74 MATCHES';
+    if (banner) banner.innerHTML = '';
+    if (loanWrap) loanWrap.innerHTML = '';
+    if (brkWrap) brkWrap.innerHTML = '';
+    if (mhWrap) mhWrap.innerHTML = `<div class="panel" style="text-align:center;color:var(--muted);font-size:12.5px">No matches completed yet. Tap <b>▶ Next Match</b> in <b>Match Sim</b> to start the season!</div>`;
+    if (champWrap) champWrap.innerHTML = '';
+    return;
+  }
+
+  if (prog) prog.textContent = s.finished ? '🏆 SEASON COMPLETE (74/74)' : `LIVE • ${s.nextIndex}/74 PLAYED`;
+  const repW = document.getElementById('replaySeasonWrap');
+  if (repW) repW.style.display = s.finished ? 'block' : 'none';
+
+  // Mid-Season Loan Window (Match 35..69)
+  if (loanWrap) {
+    if (s.nextIndex >= 35 && s.nextIndex < 70 && !state.midSeasonLoanDone) {
+      loanWrap.innerHTML = `
+        <div class="panel" style="border-color:#0ea5e9">
+          <div class="sec-bar" style="margin-top:0">
+            <div class="sec-title" style="color:#0ea5e9">🔁 MID-SEASON LOAN WINDOW OPEN!</div>
+            <button class="btn btn-blue btn-sm" onclick="executeMidSeasonLoan()">Execute Bench Loans</button>
+          </div>
+          <div style="font-size:12px;color:var(--muted)">Halfway mark reached (Match 35+)! Franchises can swap benched players before the playoff race.</div>
+        </div>`;
+    } else loanWrap.innerHTML = '';
+  }
+
+  // Latest Match Banner
+  const lastM = s.matches[s.matches.length - 1];
+  if (banner && lastM) {
+    const winT = state.teams.find(x => x.id === lastM.winner);
+    banner.innerHTML = `
+      <div class="msg" onclick="openMatchScorecard(${lastM.idx})" style="cursor:pointer;border-left-color:${winT ? winT.color : 'var(--gold)'}">
+        <div style="font-size:11px;font-weight:800;color:var(--gold);margin-bottom:3px">⚡ LATEST: ${lastM.label.toUpperCase()} — ${lastM.t1} (${lastM.s1}) vs ${lastM.t2} (${lastM.s2}) • TAP FOR SCORECARD</div>
+        <div style="font-size:12.5px">${lastM.oneLiner}</div>
+      </div>`;
+  }
+
+  // Playoff Bracket
+  if (brkWrap) {
+    if (s.nextIndex >= 70) {
+      const q1 = s.matches.find(m=>m.label==='Qualifier 1');
+      const el = s.matches.find(m=>m.label==='Eliminator');
+      const q2 = s.matches.find(m=>m.label==='Qualifier 2');
+      const gf = s.matches.find(m=>m.label==='GRAND FINAL');
+      brkWrap.innerHTML = `
+        <div class="panel" style="border-color:var(--gold)">
+          <div class="sec-title" style="margin-bottom:6px">🏆 PLAYOFF BRACKET</div>
+          <div class="bracket-grid">
+            <div class="bracket-box"><b>Qualifier 1</b><br/>${s.standings[0].id} vs ${s.standings[1].id}<br/><span style="color:#10b981">${q1 ? 'Won: '+q1.winner : 'Upcoming'}</span></div>
+            <div class="bracket-box"><b>Eliminator</b><br/>${s.standings[2].id} vs ${s.standings[3].id}<br/><span style="color:#10b981">${el ? 'Won: '+el.winner : 'Upcoming'}</span></div>
+            <div class="bracket-box"><b>Qualifier 2</b><br/>${s.playoffWinners.q1L||'TBD'} vs ${s.playoffWinners.elW||'TBD'}<br/><span style="color:#10b981">${q2 ? 'Won: '+q2.winner : 'Upcoming'}</span></div>
+            <div class="bracket-box final"><b>GRAND FINAL</b><br/>${s.playoffWinners.q1W||'TBD'} vs ${s.playoffWinners.q2W||'TBD'}<br/><b style="color:var(--gold)">${gf ? '🏆 '+gf.winner : 'Upcoming'}</b></div>
+          </div>
+        </div>`;
+    } else brkWrap.innerHTML = '';
+  }
+
+  // SUB-SECTION 4: POINTS TABLE
+  if (ptWrap) {
+    ptWrap.innerHTML = `
+      <div class="panel">
+        <div class="sec-bar" style="margin-top:0">
+          <div class="sec-title">📊 Live IPL Points Table</div>
+          <span class="pill pill-live">TOP 4 QUALIFY</span>
+        </div>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>#</th><th>Team</th><th>M</th><th>W</th><th>L</th><th>Pts</th><th>Max</th><th>NRR</th><th>Last 5</th></tr></thead>
+            <tbody>
+              ${s.standings.map((t,i)=>{
+                const rem = Math.max(0, 14 - t.m);
+                const maxPts = t.pts + rem * 2;
+                const formHtml = (t.form || []).map(f => `<span style="display:inline-block;width:15px;height:15px;line-height:15px;text-align:center;border-radius:2px;font-size:9px;font-weight:800;margin-right:2px;background:${f==='W'?'#10b981':'#e11d48'};color:#fff">${f}</span>`).join('') || '<span style="color:var(--muted)">—</span>';
+                return `
+                <tr class="${i<4?'qual-row':''}">
+                  <td>${i+1}${i<4?' Q':''}</td>
+                  <td>${getTeamLogo(t.id, 18)} <b style="color:${t.color}">${t.id}</b></td>
+                  <td>${t.m}</td><td>${t.w}</td><td>${t.l}</td>
+                  <td><b>${t.pts}</b></td>
+                  <td style="color:var(--muted)">${maxPts}</td>
+                  <td style="font-family:'JetBrains Mono',monospace">${t.nrr>=0?'+':''}${t.nrr.toFixed(3)}</td>
+                  <td>${formHtml}</td>
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>`;
+  }
+
+  // MATCH HISTORY LIST (inside Match Sim)
+  if (mhWrap && s.matches.length > 0) {
+    mhWrap.innerHTML = `
+      <div class="panel">
+        <div class="sec-title" style="margin-bottom:8px">📋 Completed Matches (${s.matches.length}/74 — Tap Any Match for Full Scorecard)</div>
+        <div class="pool-list" style="max-height:66vh">
+          ${[...s.matches].reverse().map(m=>`
+            <div class="pool-row" onclick="openMatchScorecard(${m.idx})" style="cursor:pointer;${m.label.includes('FINAL')||m.label.includes('Qualifier')||m.label.includes('Eliminator')?'border-color:var(--gold);background:var(--gold-dim)':''}">
+              <div class="p-info">
+                <div class="p-name">${m.label}: ${m.t1} (${m.s1}) vs ${m.t2} (${m.s2})</div>
+                <div class="p-sub">${m.oneLiner}</div>
+              </div>
+              <span class="pill" style="font-size:10px">VIEW</span>
+            </div>`).join('')}
+        </div>
+      </div>`;
+  }
+
+  // SUB-SECTION 5: TOP PERFORMERS & GRAND AWARDS
+  if (champWrap) {
+    if (s.finished && s.awards) {
+      const champTeam = state.teams.find(t=>t.id===s.champId);
+      champWrap.innerHTML = `
+        <div class="panel" style="border-color:var(--gold)">
+          <div style="text-align:center;padding:8px 0 14px">
+            <span class="pill pill-warn">🏆 IPL GRAND FINAL CHAMPION</span>
+            <div style="font-family:'Chakra Petch',sans-serif;font-size:36px;font-weight:700;color:${champTeam.color};margin-top:6px;text-transform:uppercase">
+              ${champTeam.name}
+            </div>
+            <div style="font-size:13px;color:var(--muted)">Defeated ${s.runnerId} in the Grand Final</div>
+          </div>
+          <div class="sec-title" style="margin-bottom:6px">🎖️ Grand Awards Ceremony</div>
+          <div class="awards-grid">
+            <div class="award-card orange"><div class="award-title">🧡 Orange Cap (Most Runs)</div><div class="award-winner">${s.awards.orange.name}</div><div class="award-stat">${s.awards.orange.team} • ${s.awards.orange.stat}</div></div>
+            <div class="award-card purple"><div class="award-title">💜 Purple Cap (Most Wickets)</div><div class="award-winner">${s.awards.purple.name}</div><div class="award-stat">${s.awards.purple.team} • ${s.awards.purple.stat}</div></div>
+            <div class="award-card brown"><div class="award-title">🤎 Brown Cap (All-Rounder)</div><div class="award-winner">${s.awards.brown.name}</div><div class="award-stat">${s.awards.brown.team} • ${s.awards.brown.stat}</div></div>
+            <div class="award-card gold"><div class="award-title">👑 Player of the Tournament</div><div class="award-winner">${s.awards.mvp.name}</div><div class="award-stat">${s.awards.mvp.team} • ${s.awards.mvp.stat}</div></div>
+            <div class="award-card"><div class="award-title">🧤 Best Catch of the Season</div><div class="award-winner">${s.bestCatch.player} (${s.bestCatch.team})</div><div class="award-stat">${s.bestCatch.desc}</div></div>
+          </div>
+        </div>`;
+    } else champWrap.innerHTML = '';
+  }
+
+  if (capsWrap && s.matches.length > 0) {
+    const played = state.players.filter(p => p.status === 'SOLD');
+    const topRuns = [...played].sort((a,b) => (s.pStats[b.id]?.runs||0) - (s.pStats[a.id]?.runs||0)).slice(0, 10);
+    const topWkts = [...played].sort((a,b) => (s.pStats[b.id]?.wkts||0) - (s.pStats[a.id]?.wkts||0)).slice(0, 10);
+    const topMvp = [...played].sort((a,b) => (s.pStats[b.id]?.impact||0) - (s.pStats[a.id]?.impact||0)).slice(0, 5);
+    const topSteals = [...played].filter(p => (s.pStats[p.id]?.impact||0) > 40).sort((a,b) =>
+      ((s.pStats[b.id]?.impact||0) / Math.max(30, b.soldPrice)) - ((s.pStats[a.id]?.impact||0) / Math.max(30, a.soldPrice))
+    ).slice(0, 5);
+
+    capsWrap.innerHTML = `
+      <div class="panel">
+        <div class="sec-title" style="margin-bottom:8px">🔥 Top Performers &amp; Season Leaderboards</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px">
+          <div style="background:var(--input-bg);border:1px solid rgba(249,115,22,0.45);border-radius:12px;padding:10px">
+            <div style="font-size:11px;font-weight:800;color:#f97316;margin-bottom:6px">🧡 ORANGE CAP (TOP 10 RUNS)</div>
+            ${topRuns.map((p,i)=>`<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0;border-bottom:1px solid var(--card-border)"><span>${i+1}. ${p.name}${getFormBadge(p.id)} <small style="color:var(--muted)">(${p.soldTo})</small></span><b>${s.pStats[p.id]?.runs||0}</b></div>`).join('')}
+          </div>
+          <div style="background:var(--input-bg);border:1px solid rgba(168,85,247,0.45);border-radius:12px;padding:10px">
+            <div style="font-size:11px;font-weight:800;color:#a855f7;margin-bottom:6px">💜 PURPLE CAP (TOP 10 WICKETS)</div>
+            ${topWkts.map((p,i)=>`<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0;border-bottom:1px solid var(--card-border)"><span>${i+1}. ${p.name}${getFormBadge(p.id)} <small style="color:var(--muted)">(${p.soldTo})</small></span><b>${s.pStats[p.id]?.wkts||0}</b></div>`).join('')}
+          </div>
+          <div style="background:var(--input-bg);border:1px solid var(--gold);border-radius:12px;padding:10px">
+            <div style="font-size:11px;font-weight:800;color:var(--gold);margin-bottom:6px">👑 MVP IMPACT LEADERS</div>
+            ${topMvp.map((p,i)=>`<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0;border-bottom:1px solid var(--card-border)"><span>${i+1}. ${p.name} <small style="color:var(--muted)">(${p.soldTo})</small></span><b>${Math.round(s.pStats[p.id]?.impact||0)} pts</b></div>`).join('')}
+          </div>
+          <div style="background:var(--input-bg);border:1px solid rgba(16,185,129,0.45);border-radius:12px;padding:10px">
+            <div style="font-size:11px;font-weight:800;color:#10b981;margin-bottom:6px">💎 BEST VALUE STEALS (PTS / ₹)</div>
+            ${topSteals.map((p,i)=>`<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0;border-bottom:1px solid var(--card-border)"><span>${i+1}. ${p.name} <small style="color:var(--muted)">(${fmtCr(p.soldPrice)})</small></span><b>${Math.round(s.pStats[p.id]?.impact||0)} pts</b></div>`).join('')}
+          </div>
+        </div>
+      </div>`;
+  }
+}
+
+
+// ==================== 14. TEAM VS TEAM COMPARISON (WEBPAGE OR EXTERNAL MANUAL AUCTION XIs) ====================
+function toggleTeamCompareInputs(){
+  const a = document.getElementById('tcSourceA').value;
+  const b = document.getElementById('tcSourceB').value;
+  document.getElementById('tcManualBoxA').style.display = a === 'MANUAL_A' ? 'block' : 'none';
+  document.getElementById('tcManualBoxB').style.display = b === 'MANUAL_B' ? 'block' : 'none';
+}
+
+function getCompareTeamPayload(side){
+  const src = document.getElementById('tcSource' + side).value;
+  if (src === 'MANUAL_' + side) {
+    const customName = (document.getElementById('tcName' + side).value || '').trim() || `Custom Team ${side}`;
+    const raw = (document.getElementById('tcList' + side).value || '').trim();
+    const names = raw.split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
+    if (names.length < 5) return { error: `Please enter at least 5–11 player names for ${customName}.` };
+    // Match against 520-player DB to estimate OVR if known
+    let sumOvr = 0, matched = 0;
+    names.forEach(n => {
+      const nl = n.toLowerCase();
+      const found = state.players.find(p => p.name.toLowerCase() === nl || p.name.toLowerCase().includes(nl));
+      if (found) { sumOvr += found.ovr; matched++; } else { sumOvr += 76; }
+    });
+    const avgOvr = Math.round(sumOvr / names.length);
+    return {
+      name: customName,
+      color: side === 'A' ? '#00e5ff' : '#ff6b35',
+      xiText: names.join(', '),
+      estRating: +Math.min(9.5, Math.max(5.5, 4.5 + ((avgOvr - 66) / 28) * 5.0)).toFixed(1),
+      source: 'Custom External XI'
+    };
+  } else {
+    const t = state.teams.find(x => x.id === src);
+    if (!t || t.squad.length < 5) return { error: `${src} needs players signed in this auction first!` };
+    const { xi, impact } = computePlayingXII(t);
+    const ev = teamCoachEval(t);
+    const listStr = xi.map(p => `${p.name}(${p.role})`).join(', ') + (impact ? ` | Impact: ${impact.name}` : '');
+    return {
+      name: `${t.id} — ${t.name}`,
+      color: t.color,
+      xiText: listStr,
+      estRating: ev.overall,
+      source: `Webpage Auction Squad (${t.home.split(' (')[0]})`
+    };
+  }
+}
+
+async function runTeamComparison(){
+  const wrap = document.getElementById('teamCompareResultWrap');
+  const tA = getCompareTeamPayload('A');
+  const tB = getCompareTeamPayload('B');
+  if (tA.error) { showToast(tA.error); return; }
+  if (tB.error) { showToast(tB.error); return; }
+  const venue = document.getElementById('tcVenue').value;
+
+  let probA = Math.min(78, Math.max(22, Math.round(50 + (tA.estRating - tB.estRating) * 11)));
+  let probB = 100 - probA;
+  let ratingsA = { bat: tA.estRating, bowl: tA.estRating, depth: tA.estRating };
+  let ratingsB = { bat: tB.estRating, bowl: tB.estRating, depth: tB.estRating };
+  let winner = probA >= probB ? tA.name : tB.name;
+  let verdict = `Based on overall player quality, ${winner} holds a slight edge on ${venue}. Connect your Gemini API key in ⚙️ Settings for a full tactical Senior Analyst breakdown!`;
+  let keyBattle = 'Top-order powerplay batters vs new-ball pace attack';
+  let aiPowered = false;
+
+  if (getSavedApiKey()) {
+    wrap.innerHTML = `<div class="panel"><div class="sec-title">🤖 Gemini Senior Analyst comparing ${tA.name} vs ${tB.name}...</div><div style="font-size:12px;color:var(--muted);margin-top:5px">Analysing batting firepower, death bowling, spin options, fielding &amp; matchups on ${venue}...</div></div>`;
+    const prompt = `You are a brutally honest IPL Senior Cricket Analyst comparing two Playing XIs head-to-head on: ${venue}.
+Team A: ${tA.name} (${tA.source})
+XI: ${tA.xiText}
+
+Team B: ${tB.name} (${tB.source})
+XI: ${tB.xiText}
+
+Give an honest, data-grounded head-to-head verdict:
+- "probA": integer 20..80 (Team A win probability %; Team B is 100 - probA).
+- "a": {"bat": 1..10, "bowl": 1..10, "depth": 1..10, "edge": "1 short strength"}
+- "b": {"bat": 1..10, "bowl": 1..10, "depth": 1..10, "edge": "1 short strength"}
+- "winner": name of the stronger team on this pitch.
+- "keyBattle": 1 exciting player-vs-player matchup between these two XIs.
+- "verdict": 2 sharp sentences explaining WHY the winner beats the other team (and any weakness in the losing XI).
+Return ONLY valid JSON: {"probA": 58, "a": {"bat": 8.8, "bowl": 8.2, "depth": 8.5, "edge": "..."}, "b": {"bat": 8.1, "bowl": 8.4, "depth": 8.0, "edge": "..."}, "winner": "...", "keyBattle": "...", "verdict": "..."}`;
+
+    const aiRes = await callGeminiJSON(prompt, 0.7);
+    if (aiRes && typeof aiRes.probA === 'number') {
+      probA = Math.min(82, Math.max(18, Math.round(aiRes.probA)));
+      probB = 100 - probA;
+      if (aiRes.a) ratingsA = aiRes.a;
+      if (aiRes.b) ratingsB = aiRes.b;
+      if (aiRes.winner) winner = aiRes.winner;
+      if (aiRes.verdict) verdict = aiRes.verdict;
+      if (aiRes.keyBattle) keyBattle = aiRes.keyBattle;
+      aiPowered = true;
+    }
+  }
+
+  sfxTrade();
+  wrap.innerHTML = `
+    <div class="panel" style="border-color:var(--gold)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <div class="sec-title">⚔️ HEAD-TO-HEAD VERDICT ${aiPowered ? '(GEMINI AI)' : '(OFFLINE)'}</div>
+        <span class="pill pill-live">🏆 EDGE: ${winner}</span>
+      </div>
+
+      <div style="display:flex;justify-content:space-between;font-size:13px;font-weight:800">
+        <span style="color:${tA.color}">${tA.name} (${probA}%)</span>
+        <span style="color:${tB.color}">${tB.name} (${probB}%)</span>
+      </div>
+      <div class="win-prob-bar" style="height:10px;margin:6px 0 12px">
+        <div style="width:${probA}%;background:${tA.color}"></div>
+        <div style="width:${probB}%;background:${tB.color}"></div>
+      </div>
+
+      <div class="compare-grid" style="margin-bottom:10px">
+        <div class="cmp-card" style="border-top:3px solid ${tA.color}">
+          <b style="color:${tA.color}">${tA.name}</b>
+          <div class="cmp-row"><span>🏏 Batting</span><b>${ratingsA.bat}/10</b></div>
+          <div class="cmp-row"><span>🎯 Bowling</span><b>${ratingsA.bowl}/10</b></div>
+          <div class="cmp-row"><span>⚡ Depth</span><b>${ratingsA.depth}/10</b></div>
+          ${ratingsA.edge ? `<div style="font-size:11.5px;color:#10b981;margin-top:5px">✓ ${ratingsA.edge}</div>` : ''}
+        </div>
+        <div class="cmp-card" style="border-top:3px solid ${tB.color}">
+          <b style="color:${tB.color}">${tB.name}</b>
+          <div class="cmp-row"><span>🏏 Batting</span><b>${ratingsB.bat}/10</b></div>
+          <div class="cmp-row"><span>🎯 Bowling</span><b>${ratingsB.bowl}/10</b></div>
+          <div class="cmp-row"><span>⚡ Depth</span><b>${ratingsB.depth}/10</b></div>
+          ${ratingsB.edge ? `<div style="font-size:11.5px;color:#10b981;margin-top:5px">✓ ${ratingsB.edge}</div>` : ''}
+        </div>
+      </div>
+
+      <div class="msg" style="margin-bottom:6px"><b>🔥 Key Matchup:</b> ${keyBattle}</div>
+      <div class="msg" style="border-left-color:#10b981"><b>🧠 Analyst Verdict:</b> ${verdict}</div>
+    </div>`;
+}
+
+
+
+// ==================== V32 UPGRADE 3: LIVE BALL-BY-BALL FINAL OVER THRILLER ====================
+let foState = null;
+let foAutoTimer = null;
+
+function stopFinalOverAuto(){
+  if (foAutoTimer) { clearInterval(foAutoTimer); foAutoTimer = null; }
+}
+
+function openFinalOverSim(){ openPreMatchPreview('FINAL_OVER'); }
+function launchFinalOverConfirmed(){
+  ensureSeasonInitialized();
+  const s = state.seasonData;
+  if (s.finished) { showToast('Season complete! Tap Replay New Season to play again.'); return; }
+
+  let t1Id, t2Id, label;
+  const idx = s.nextIndex;
+  if (idx < 70) { [t1Id, t2Id] = s.schedule[idx]; label = `Match ${idx + 1}`; }
+  else if (idx === 70) { t1Id = s.standings[0].id; t2Id = s.standings[1].id; label = 'Qualifier 1'; }
+  else if (idx === 71) { t1Id = s.standings[2].id; t2Id = s.standings[3].id; label = 'Eliminator'; }
+  else if (idx === 72) { t1Id = s.playoffWinners.q1L; t2Id = s.playoffWinners.elW; label = 'Qualifier 2'; }
+  else { t1Id = s.playoffWinners.q1W; t2Id = s.playoffWinners.q2W; label = 'GRAND FINAL'; }
+
+  const teamA = state.teams.find(x => x.id === t1Id);
+  const teamB = state.teams.find(x => x.id === t2Id);
+  const xiA = computePlayingXII(teamA).xi;
+  const xiB = computePlayingXII(teamB).xi;
+
+  const target = Math.round(168 + Math.random() * 38);
+  const wktsA = Math.min(9, Math.floor(4 + Math.random() * 5));
+  const needToWin = Math.floor(8 + Math.random() * 14); // 8 to 21 runs needed off final 6 balls!
+  const bScore19 = target - needToWin;
+  const bWkts = Math.min(7, Math.floor(3 + Math.random() * 4));
+
+  const battersB = xiB.filter(p => p.role === 'B' || p.role === 'WK' || p.role === 'AR');
+  const bowlersA = xiA.filter(p => p.role === 'BW' || p.role === 'AR');
+  const striker = battersB[Math.min(battersB.length - 1, 3)] || xiB[0];
+  const partner = battersB[Math.min(battersB.length - 1, 4)] || xiB[1] || striker;
+  const bowler = bowlersA[0] || xiA[xiA.length - 1];
+
+  foState = {
+    label, t1Id, t2Id, teamA, teamB, xiA, xiB,
+    scoreA: target - 1, wktsA, target,
+    scoreB: bScore19, wktsB: bWkts,
+    ball: 0, outcomes: [], finished: false,
+    striker, partner, bowler, strikerRuns: 28, bowlerWkts: 1
+  };
+
+  document.getElementById('foTitle').textContent = `🎬 ${label.toUpperCase()} — FINAL OVER LIVE`;
+  document.getElementById('foSub').textContent = `📍 ${teamA.home} • ${t2Id} chasing ${target}`;
+  document.getElementById('foCommentary').innerHTML = `<div class="msg">🎙️ <b>19.0 Overs Done!</b> ${bowler.name} has the ball for ${t1Id}. ${striker.name} is on strike for ${t2Id} — <b>${needToWin} needed off 6 balls!</b></div>`;
+  document.getElementById('btnBowlNextBall').disabled = false;
+  document.getElementById('btnAutoFinalOver').disabled = false;
+  renderFinalOverUI();
+  document.getElementById('finalOverBackdrop').classList.add('open');
+}
+
+function renderFinalOverUI(){
+  if (!foState) return;
+  const f = foState;
+  const need = Math.max(0, f.target - f.scoreB);
+  const left = 6 - f.ball;
+  document.getElementById('foScoreLine').textContent = `${f.t1Id} ${f.scoreA}/${f.wktsA} (20.0)  vs  ${f.t2Id} ${f.scoreB}/${f.wktsB} (19.${f.ball})`;
+  if (!f.finished) {
+    document.getElementById('foEquation').textContent = `${f.t2Id} NEED ${need} RUNS OFF ${left} BALL${left === 1 ? '' : 'S'}`;
+  }
+  document.getElementById('foMatchup').textContent = `🏏 ${f.striker.name} (${f.strikerRuns}*)  vs  🎯 ${f.bowler.name}`;
+
+  const row = document.getElementById('foBallsRow');
+  row.innerHTML = Array.from({ length: 6 }, (_, i) => {
+    const out = f.outcomes[i];
+    if (!out) return `<div class="ball-pill">${i + 1}</div>`;
+    const cls = out === '6' ? 'b-6' : out === '4' ? 'b-4' : out === 'W' ? 'b-w' : out === '0' ? 'b-0' : 'b-r';
+    return `<div class="ball-pill ${cls}">${out}</div>`;
+  }).join('');
+}
+
+function bowlFinalOverBall(){
+  if (!foState || foState.finished) return;
+  const f = foState;
+  f.ball++;
+
+  const batSkill = (f.striker.ovr || 80) - (f.bowler.ovr || 80);
+  const roll = Math.random() * 100 + batSkill * 0.45;
+  let code = '1', runs = 1, text = '';
+
+  if (roll < 15) {
+    code = 'W'; runs = 0; f.wktsB++; f.bowlerWkts++;
+    text = `💥 <b>OUT!</b> ${f.bowler.name} nails a searing yorker — ${f.striker.name} is cleaned up! Huge roar from the ${f.t1Id} dugout!`;
+    const nextBat = f.xiB[Math.min(f.xiB.length - 1, f.wktsB + 1)] || f.partner;
+    f.striker = nextBat; f.strikerRuns = 0;
+    sfxUnsold();
+  } else if (roll < 33) {
+    code = '0'; runs = 0;
+    text = `• <b>DOT BALL!</b> Slower bouncer from ${f.bowler.name}, ${f.striker.name} swings and misses! Pressure mounts!`;
+    beep(320, 0.08, 'sine', 0.09);
+  } else if (roll < 56) {
+    code = '1'; runs = 1; f.strikerRuns += 1;
+    text = `1️⃣ Dug out to long-on for a sharp single. Strike rotates.`;
+    [f.striker, f.partner] = [f.partner, f.striker];
+    beep(540, 0.06, 'triangle', 0.08);
+  } else if (roll < 71) {
+    code = '2'; runs = 2; f.strikerRuns += 2;
+    text = `2️⃣ Whipped into the deep mid-wicket gap — hard-run TWO!`;
+    beep(620, 0.08, 'triangle', 0.10);
+  } else if (roll < 86) {
+    code = '4'; runs = 4; f.strikerRuns += 4;
+    text = `🔥 <b>FOUR!</b> ${f.striker.name} slices it past backward point — races away to the rope!`;
+    sfxPaddle();
+  } else {
+    code = '6'; runs = 6; f.strikerRuns += 6;
+    text = `🚀 <b>MASSIVE SIX!</b> ${f.striker.name} launches ${f.bowler.name} 96 metres into the second tier!`;
+    sfxHijack();
+  }
+
+  f.scoreB += runs;
+  f.outcomes.push(code);
+
+  const feed = document.getElementById('foCommentary');
+  feed.innerHTML += `<div class="msg"><b>19.${f.ball}:</b> ${text}</div>`;
+  feed.scrollTop = feed.scrollHeight;
+
+  // Check if match decided!
+  if (f.scoreB >= f.target || f.ball >= 6 || f.wktsB >= 10) {
+    f.finished = true;
+    stopFinalOverAuto();
+    document.getElementById('btnBowlNextBall').disabled = true;
+    document.getElementById('btnAutoFinalOver').disabled = true;
+
+    let winnerId, margin;
+    if (f.scoreB >= f.target) {
+      winnerId = f.t2Id;
+      margin = `${10 - f.wktsB} wickets (with ${6 - f.ball} ball${6 - f.ball === 1 ? '' : 's'} left)`;
+    } else if (f.scoreB === f.scoreA) {
+      // Instant Super Over decider
+      const soWin = Math.random() < 0.5 ? f.t2Id : f.t1Id;
+      winnerId = soWin;
+      margin = `Super Over Thriller!`;
+    } else {
+      winnerId = f.t1Id;
+      margin = `${f.scoreA - f.scoreB} runs`;
+    }
+
+    document.getElementById('foEquation').textContent = `🏆 ${winnerId} WON BY ${margin.toUpperCase()}!`;
+    feed.innerHTML += `<div class="msg" style="border-left-color:#10b981">🏆 <b>FULL TIME:</b> <b>${winnerId}</b> clinch a nail-biting ${f.label} by <b>${margin}</b>!</div>`;
+    feed.scrollTop = feed.scrollHeight;
+    sfxCrowdRoar(1.5);
+    fireConfetti(state.teams.find(x => x.id === winnerId)?.color || '#facc15');
+    commitFinalOverToSeason(winnerId, margin);
+  }
+  renderFinalOverUI();
+}
+
+function autoPlayFinalOver(){
+  if (!foState || foState.finished) return;
+  stopFinalOverAuto();
+  foAutoTimer = setInterval(() => {
+    if (!foState || foState.finished) { stopFinalOverAuto(); return; }
+    bowlFinalOverBall();
+  }, 1050);
+}
+
+function commitFinalOverToSeason(winnerId, margin){
+  const s = state.seasonData;
+  const f = foState;
+  const A = s.table[f.t1Id], B = s.table[f.t2Id];
+  const ovB = +(19 + f.ball / 10).toFixed(1);
+  const idx = s.nextIndex;
+  const oneLiner = `🎬 FINAL OVER THRILLER: ${winnerId} beat ${winnerId === f.t1Id ? f.t2Id : f.t1Id} by ${margin} (Over: ${f.outcomes.join(' ')}).`;
+
+  const makeQuickCard = (teamId, xi, totRuns, wktsLost, oversStr, oppXI, starBat, starBatR, starBowl, starBowlW) => {
+    const bats = xi.slice(0, 7);
+    let remR = Math.max(20, totRuns - 10);
+    const batCard = bats.map((p, i) => {
+      const r = (starBat && p.id === starBat.id) ? starBatR : (i === bats.length - 1 ? Math.max(0, remR) : Math.min(remR, Math.round((totRuns / 6.5) * (0.6 + Math.random() * 0.7))));
+      remR = Math.max(0, remR - r);
+      const b = Math.max(1, Math.round((r / Math.max(100, p.sr || 135)) * 100));
+      return { name: p.name, r, b, f4: Math.floor(r / 12), s6: Math.floor(r / 22), sr: ((r / b) * 100).toFixed(1), out: i < wktsLost };
+    });
+    const bowls = oppXI.filter(p => p.role === 'BW' || p.role === 'AR').slice(0, 5);
+    let remW = wktsLost;
+    const bowlCard = (bowls.length ? bowls : oppXI.slice(-5)).map((p, i) => {
+      const w = (starBowl && p.id === starBowl.id) ? starBowlW : (i === 0 ? Math.min(remW, 2) : Math.min(remW, Math.floor(Math.random() * 2)));
+      remW = Math.max(0, remW - w);
+      return { id: p.id, name: p.name, ov: 4, r: Math.round(totRuns / 5 + (Math.random() * 10 - 5)), w };
+    });
+    return { team: teamId, score: `${totRuns}/${wktsLost}`, overs: oversStr, batCard, bowlCard };
+  };
+  const foInn1 = makeQuickCard(f.t1Id, f.xiA, f.scoreA, f.wktsA, '20.0', f.xiB, null, 0, null, 0);
+  const foInn2 = makeQuickCard(f.t2Id, f.xiB, f.scoreB, f.wktsB, ovB.toFixed(1), f.xiA, f.striker, f.strikerRuns, f.bowler, f.bowlerWkts);
+
+  const mObj = {
+    idx: s.matches.length, label: f.label, venue: f.teamA.home.split(' (')[0],
+    t1: f.t1Id, s1: `${f.scoreA}/${f.wktsA}`, t2: f.t2Id, s2: `${f.scoreB}/${f.wktsB}`,
+    winner: winnerId, margin, potm: winnerId === f.t2Id ? `${f.striker.name} (${f.strikerRuns}*)` : `${f.bowler.name} (${f.bowlerWkts}w)`,
+    injury: null, superOver: null, impactNotes: [], oneLiner, inn1: foInn1, inn2: foInn2
+  };
+  s.matches.push(mObj);
+  if (s.pStats[f.striker.id]) { s.pStats[f.striker.id].runs += f.strikerRuns; s.pStats[f.striker.id].impact += f.strikerRuns * 1.3; }
+  if (s.pStats[f.bowler.id]) { s.pStats[f.bowler.id].wkts += f.bowlerWkts; s.pStats[f.bowler.id].impact += f.bowlerWkts * 26; }
+
+  if (idx < 70) {
+    A.m++; B.m++;
+    A.rf += f.scoreA; A.of += 20; A.ra += f.scoreB; A.oa += ovB;
+    B.rf += f.scoreB; B.of += ovB; B.ra += f.scoreA; B.oa += 20;
+    if (winnerId === A.id) { A.w++; A.pts += 2; B.l++; } else { B.w++; B.pts += 2; A.l++; }
+    s.standings = Object.values(s.table).map(t => {
+      t.nrr = +((t.rf / Math.max(1, t.of)) - (t.ra / Math.max(1, t.oa))).toFixed(3);
+      return t;
+    }).sort((a,b) => b.pts - a.pts || b.nrr - a.nrr);
+  } else if (idx === 70) { s.playoffWinners.q1W = winnerId; s.playoffWinners.q1L = winnerId === f.t1Id ? f.t2Id : f.t1Id; }
+  else if (idx === 71) { s.playoffWinners.elW = winnerId; }
+  else if (idx === 72) { s.playoffWinners.q2W = winnerId; }
+  else if (idx === 73) { s.champId = winnerId; s.runnerId = winnerId === f.t1Id ? f.t2Id : f.t1Id; s.finished = true; finalizeSeasonAwards(); }
+
+  s.nextIndex++;
+  renderSeason();
+  saveState();
+}
+
+// ==================== V32 UPGRADE 4: DOWNLOADABLE BEST XI & AUCTION GRADE PNG CARD ====================
+function downloadSquadPNG(){
+  const t = state.teams.find(x => x.id === selectedSquadTab);
+  if (!t || !t.squad.length) { showToast('No players signed for this team yet!'); return; }
+  const { xi, impact } = computePlayingXII(t);
+  const ev = teamCoachEval(t);
+
+  const W = 1080, H = 1350;
+  const cvs = document.createElement('canvas');
+  cvs.width = W; cvs.height = H;
+  const ctx = cvs.getContext('2d');
+
+  // Deep Broadcast Studio Background
+  const bg = ctx.createLinearGradient(0, 0, 0, H);
+  bg.addColorStop(0, '#070d1c');
+  bg.addColorStop(1, '#04070f');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, W, H);
+
+  // Team Colour Spotlight Glow at Top
+  const glow = ctx.createRadialGradient(W / 2, 120, 40, W / 2, 120, 560);
+  glow.addColorStop(0, t.color + '55');
+  glow.addColorStop(1, 'transparent');
+  ctx.fillStyle = glow;
+  ctx.fillRect(0, 0, W, 620);
+
+  // Outer Broadcast Border
+  ctx.strokeStyle = t.color;
+  ctx.lineWidth = 6;
+  ctx.strokeRect(28, 28, W - 56, H - 56);
+
+  // Top Header Badge
+  ctx.fillStyle = t.color;
+  ctx.fillRect(60, 62, 340, 44);
+  ctx.fillStyle = '#060a14';
+  ctx.font = 'bold 22px monospace';
+  ctx.fillText('IPL MEGA AUCTION • XI CARD', 78, 92);
+
+  // Grade Box Top Right
+  ctx.fillStyle = '#0f172a';
+  ctx.strokeStyle = '#facc15';
+  ctx.lineWidth = 3;
+  ctx.fillRect(W - 260, 56, 200, 95);
+  ctx.strokeRect(W - 260, 56, 200, 95);
+  ctx.fillStyle = '#94a3b8';
+  ctx.font = 'bold 18px monospace';
+  ctx.fillText('DRAFT GRADE', W - 224, 86);
+  ctx.fillStyle = '#facc15';
+  ctx.font = 'bold 42px sans-serif';
+  ctx.fillText(`${ev.overall}/10`, W - 224, 134);
+
+  // Team Name & Subtitle
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'italic bold 54px sans-serif';
+  ctx.fillText(t.name.toUpperCase(), 60, 178);
+  ctx.fillStyle = '#94a3b8';
+  ctx.font = '600 22px monospace';
+  ctx.fillText(`${t.home.split(' (')[0]}  •  PURSE LEFT: ${fmtCr(t.purse)}  •  SQUAD: ${t.squad.length}/25`, 60, 218);
+
+  // Divider Line
+  ctx.strokeStyle = 'rgba(255,255,255,0.16)';
+  ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(60, 246); ctx.lineTo(W - 60, 246); ctx.stroke();
+
+  // Playing XI Rows
+  let y = 278;
+  xi.forEach((p, i) => {
+    ctx.fillStyle = i % 2 === 0 ? 'rgba(30, 41, 59, 0.72)' : 'rgba(15, 23, 42, 0.72)';
+    ctx.fillRect(60, y, W - 120, 70);
+    ctx.fillStyle = t.color;
+    ctx.fillRect(60, y, 8, 70);
+
+    ctx.fillStyle = '#facc15';
+    ctx.font = 'bold 26px monospace';
+    ctx.fillText(String(i + 1).padStart(2, '0'), 86, y + 44);
+
+    const capTag = t.captainId === p.id ? ' (C)' : t.vcId === p.id ? ' (VC)' : '';
+    const osTag = p.os ? ' [OS]' : '';
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 28px sans-serif';
+    ctx.fillText(`${p.name}${capTag}${osTag}`, 145, y + 44);
+
+    ctx.fillStyle = '#38bdf8';
+    ctx.font = 'bold 20px monospace';
+    ctx.fillText(roleLabel(p.role).toUpperCase(), W - 400, y + 43);
+
+    ctx.fillStyle = '#10b981';
+    ctx.font = 'bold 24px monospace';
+    ctx.fillText(fmtCr(p.soldPrice || p.base), W - 210, y + 44);
+    y += 78;
+  });
+
+  // Impact Sub Banner
+  if (impact) {
+    ctx.fillStyle = 'rgba(250, 204, 21, 0.14)';
+    ctx.strokeStyle = '#facc15';
+    ctx.lineWidth = 2.5;
+    ctx.fillRect(60, y + 12, W - 120, 74);
+    ctx.strokeRect(60, y + 12, W - 120, 74);
+    ctx.fillStyle = '#facc15';
+    ctx.font = 'bold 22px monospace';
+    ctx.fillText('⚡ IMPACT SUB:', 84, y + 57);
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 28px sans-serif';
+    ctx.fillText(`${impact.name} (${roleLabel(impact.role)})`, 290, y + 57);
+  }
+
+  // Footer
+  ctx.fillStyle = '#64748b';
+  ctx.font = '600 18px monospace';
+  ctx.fillText('THE GAVEL HOUSE — LIVE BROADCAST TV STUDIO HUD', 60, H - 56);
+
+  const a = document.createElement('a');
+  a.href = cvs.toDataURL('image/png');
+  a.download = `${t.id}_Playing_XII_Draft_Card.png`;
+  a.click();
+  sfxTrade();
+  showToast(`🖼️ Downloaded ${t.id} Playing XII PNG Card!`);
+}
+
+// Safe Boot with error guard
+
