@@ -891,21 +891,23 @@ async function callGeminiJSON(prompt, temperature=0.8, timeoutMs=7000){
   const keys = getSavedApiKeys();
   if (!keys.length) {
     if (!isHostedOnline()) return null;
-    try {
-      const ctrl = new AbortController();
-      const tm = setTimeout(() => ctrl.abort(), timeoutMs);
-      const res = await fetch('/.netlify/functions/ai', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        signal: ctrl.signal,
-        body: JSON.stringify({ prompt, temperature, grounded: false })
-      });
-      clearTimeout(tm);
-      if (res.ok) {
-        const parsed = await res.json();
-        if (parsed && typeof parsed === 'object' && !parsed.error) return parsed;
-      }
-    } catch(e){}
+    for (const endpoint of ['/api/ai', '/.netlify/functions/ai']) {
+      try {
+        const ctrl = new AbortController();
+        const tm = setTimeout(() => ctrl.abort(), timeoutMs);
+        const res = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          signal: ctrl.signal,
+          body: JSON.stringify({ prompt, temperature, grounded: false })
+        });
+        clearTimeout(tm);
+        if (res.ok) {
+          const parsed = await res.json();
+          if (parsed && typeof parsed === 'object' && !parsed.error) return parsed;
+        }
+      } catch(e){}
+    }
     return null;
   }
   const modelsToTry = workingGeminiModel
@@ -2308,6 +2310,22 @@ function toggleTopTools(force){
 async function callGeminiGroundedScout(prompt){
   const key = getSavedApiKey();
   if (!key) return null;
+  if (key === '__NETLIFY_PROXY__') {
+    for (const endpoint of ['/api/ai', '/.netlify/functions/ai']) {
+      try {
+        const res = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prompt, temperature: 0.4, grounded: true })
+        });
+        if (res.ok) {
+          const parsed = await res.json();
+          if (parsed && typeof parsed === 'object' && !parsed.error) return parsed;
+        }
+      } catch(e){}
+    }
+    return null;
+  }
   const modelsToTry = workingGeminiModel
     ? [workingGeminiModel, ...GEMINI_MODELS.filter(m => m !== workingGeminiModel)]
     : GEMINI_MODELS;
