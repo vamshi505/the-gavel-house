@@ -3028,9 +3028,11 @@ async function startAIAuctioneerLoop(){
       if (sparked) continue;
     }
 
-    // 5. Nobody has bid yet -> brief chance for human GM to open at base price, else UNSOLD
+    // 5. Nobody has bid yet -> check if all 25 squad slots are full or unsold round has no takers
     if (!state.curLeader) {
-      if (humanCanBid) {
+      const allFull25 = state.teams.every(tm => tm.squad.length >= 25);
+      const isAccelOrLate = (p.set === 'Accelerated') || allFull25;
+      if (humanCanBid && !allFull25) {
         setAIAuctioneerStatus(`🎙️ No rival takers at ${fmtCr(p.base)} — <b>${myId}</b> can open the bid or tap <b>PASS</b>.`);
         while (token === aiAuctLoopToken && !aiAuctPaused) {
           if (state.curLeader === myId || (state.passedTeams || []).includes(myId)) break;
@@ -3041,11 +3043,21 @@ async function startAIAuctioneerLoop(){
       }
       setAIAuctioneerStatus(`✕ No takers for <b>${p.name}</b> — calling UNSOLD!`);
       hammerUnsold();
-      // Wait for full UNSOLD voice announcement + clean pause before next player
       if (voiceOn && window._lastGavelSpeech) {
-        await Promise.race([window._lastGavelSpeech, waitAuctioneerMs(3500, token)]);
+        await Promise.race([window._lastGavelSpeech, waitAuctioneerMs(3200, token)]);
       }
-      if (!(await waitAuctioneerMs(850, token))) break;
+      if (isAccelOrLate) {
+        const anyAvailLeft = state.players.some(x => x.status === 'AVAIL');
+        if (!anyAvailLeft || allFull25) {
+          state.players.forEach(x => { if (x.status === 'AVAIL') x.status = 'UNSOLD'; });
+          setAIAuctioneerStatus('🏁 All 25-man squads / unsold pool wrapped up! Auction closed — ready for Trades & Season.');
+          stopAIAuctioneer();
+          renderAll();
+          saveState();
+          break;
+        }
+      }
+      if (!(await waitAuctioneerMs(650, token))) break;
       continue;
     }
 
@@ -3120,10 +3132,19 @@ function gmSkipCurrentSet(){
 }
 
 function gmAutoBuildRestAuction(){
-  if (!confirm('Let your AI Coaching Staff automatically complete the rest of the auction and build your full 25-player squad?')) return;
+  if (!confirm('Let your AI Coaching Staff automatically complete the rest of the auction and build full 25-player squads for all teams?')) return;
   stopAIAuctioneer();
   quickSimRestAuction();
-  setAIAuctioneerStatus('🏁 Auction auto-completed! Your AI Staff built your full squad — head to <b>SQUADS</b> or <b>SEASON</b>!');
+  if (typeof aiPickAllPlayingXIIs === 'function') {
+    state.teams.forEach(t => {
+      if (t.squad.length >= 11 && typeof applySmartOfflineXII === 'function') {
+        applySmartOfflineXII(t, t.home, false, true);
+      }
+    });
+  }
+  renderAll();
+  saveState();
+  setAIAuctioneerStatus('🏁 All 10 squads built (25/25) & Playing XIIs set! Open <b>SQUADS</b> or <b>SEASON</b>.');
 }
 
 

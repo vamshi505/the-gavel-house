@@ -60,20 +60,79 @@ function autoSortBattingOrder(idList){
 
 // Strict IPL rule: if 4 OS are in the XI, Impact Sub MUST be Indian (!p.os).
 function pickWiseImpactSub(t, xiIds, pitchDesc=''){
-  const xiSet = new Set(xiIds);
-  const xiPlayers = xiIds.map(id => state.players[id]).filter(Boolean);
+  if (!t || !Array.isArray(t.squad)) return null;
+  const xiSet = new Set(xiIds || []);
+  const xiPlayers = (xiIds || []).map(id => state.players[id]).filter(Boolean);
   const osInXI = xiPlayers.filter(p => p.os).length;
   const xiBowlers = xiPlayers.filter(p => p.role === 'BW' || p.role === 'AR').length;
   const xiSpinners = xiPlayers.filter(p => isSpinner(p)).length;
   const xiHasWK = xiPlayers.some(p => p.role === 'WK');
+  const pitchL = (pitchDesc || t.home || '').toLowerCase();
+  const isSpinPitch = pitchL.includes('chepauk') || pitchL.includes('ekana') || pitchL.includes('jaipur');
+
+  const bench = t.squad
+    .map(id => state.players[id])
+    .filter(p => p && !p.injured && !xiSet.has(p.id) && (osInXI < 4 || !p.os));
+  if (!bench.length) return null;
+
+  const scored = bench.map(p => {
+    let sc = p.ovr || 70;
+    if (!xiHasWK && p.role === 'WK') sc += 25;
+    if (xiBowlers < 5 && (p.role === 'BW' || p.role === 'AR')) sc += 18;
+    if (isSpinPitch && xiSpinners < 2 && isSpinner(p)) sc += 16;
+    if (p.role === 'AR') sc += 6;
+    return { p, sc };
+  }).sort((a,b) => b.sc - a.sc);
+
+  return scored[0]?.p || null;
+}
+
+function sanitizeImpactForXI(t, xiIds, impId, pitchDesc=''){
+  const xiSet = new Set(xiIds || []);
+  const osInXI = (xiIds || []).map(id => state.players[id]).filter(p => p && p.os).length;
+  if (impId !== null && impId !== undefined) {
+    const cand = state.players[parseInt(impId, 10)];
+    if (cand && t.squad.includes(cand.id) && !xiSet.has(cand.id) && !(osInXI >= 4 && cand.os)) {
+      return cand;
+    }
+  }
+  return pickWiseImpactSub(t, xiIds, pitchDesc);
+}
+
+function computePlayingXII(t, pitchDesc=''){
+  if (!t || !Array.isArray(t.squad) || !t.squad.length) return { xi: [], impact: null };
+  const validSquadSet = new Set(t.squad);
+  if (Array.isArray(t.customXI) && t.customXI.length === 11) {
+    const cleanIds = [];
+    let os = 0;
+    for (const rawId of t.customXI) {
+      const id = parseInt(rawId, 10);
+      const p = state.players[id];
+      if (!validSquadSet.has(id) || !p || cleanIds.includes(id)) continue;
+      if (p.os && os >= 4) continue;
+      cleanIds.push(id);
+      if (p.os) os++;
+    }
+    if (cleanIds.length < 11) {
+      const fillers = t.squad.map(id => state.players[id]).filter(p => p && !cleanIds.includes(p.id) && (!p.os || os < 4)).sort((a,b) => b.ovr - a.ovr);
+      for (const f of fillers) {
+        if (cleanIds.length >= 11) break;
+        cleanIds.push(f.id);
+        if (f.os) os++;
+      }
+    }
+    if (cleanIds.length === 11) {
+      const xi = cleanIds.map(id => state.players[id]).filter(Boolean);
+      const impact = sanitizeImpactForXI(t, cleanIds, t.customImpact, pitchDesc || t.home);
+      return { xi, impact };
+    }
+  }
   if (typeof buildSmartOfflinePlayingXII === 'function') {
-    const smart = buildSmartOfflinePlayingXII(t, pitchDesc);
+    const smart = buildSmartOfflinePlayingXII(t, pitchDesc || t.home);
     return { xi: smart.xi, impact: smart.impact };
   }
-  const sorted = t.squad.map(id=>state.players[id]).filter(Boolean).sort((a,b)=>b.ovr-a.ovr);
-  const xi = sorted.slice(0, 11);
-  const orderedIds = autoSortBattingOrder(xi.map(p => p.id));
-  return { xi: orderedIds.map(id => state.players[id]), impact: pickWiseImpactSub(t, orderedIds, pitchDesc) };
+  const xi = t.squad.slice(0, 11).map(id => state.players[id]).filter(Boolean);
+  return { xi, impact: null };
 }
 
 function openXIEditor(tid){
