@@ -3049,56 +3049,51 @@ async function startAIAuctioneerLoop(){
       continue;
     }
 
-    // 6. Someone leads & 9 AI bots are quiet -> Going Once -> Going Twice -> SOLD!
+    // 6. Someone leads & 9 AI bots are quiet -> Going Once -> Going Twice -> 3s Countdown -> SOLD!
     if (state.gavelStage === 0) {
-      setAIAuctioneerStatus(`🔔 Going Once at <b>${fmtCr(state.curBid)}</b> to <b>${state.curLeader}</b> — tap <b>BID</b> to jump in!`);
+      setAIAuctioneerStatus(`🔔 Going Once at <b>${fmtCr(state.curBid)}</b> to <b>${state.curLeader}</b>!`);
       callGoingOnce();
-      const onceMs = voiceOn ? 1400 : (fast ? 650 : 1100);
+      const onceMs = voiceOn ? 1150 : (fast ? 500 : 850);
       for (let t = 0; t < onceMs; t += 60) {
-        if (state.gavelStage === 0 || state.curLeader === myId) break;
+        if (state.gavelStage === 0) break;
         if (!(await waitAuctioneerMs(60, token))) break;
       }
       if (token !== aiAuctLoopToken || aiAuctPaused) break;
       continue;
     }
     if (state.gavelStage === 1) {
-      setAIAuctioneerStatus(`🔥 Going Twice at <b>${fmtCr(state.curBid)}</b> to <b>${state.curLeader}</b> — Final Call! Tap <b>BID</b> to snatch!`);
+      setAIAuctioneerStatus(`🔥 Going Twice at <b>${fmtCr(state.curBid)}</b> to <b>${state.curLeader}</b> — 3s final call!`);
       callGoingTwice();
-      const twiceMs = voiceOn ? 1500 : (fast ? 700 : 1200);
+      const twiceMs = voiceOn ? 1200 : (fast ? 550 : 900);
       for (let t = 0; t < twiceMs; t += 60) {
-        if (state.gavelStage === 0 || state.curLeader === myId) break;
+        if (state.gavelStage === 0) break;
         if (!(await waitAuctioneerMs(60, token))) break;
       }
       if (token !== aiAuctLoopToken || aiAuctPaused) break;
       continue;
     }
     if (state.gavelStage >= 2) {
-      // 3-SECOND LAST-CHANCE WINDOW if Human GM isn't leading & can still afford the next bid (works whether you passed or stayed quiet!)
-      const nextReenterBid = Math.min(MAX_BID_CAP, state.curBid + nextInc(state.curBid));
-      const canReenter = myTeam && state.curLeader !== myId &&
-        state.curBid < MAX_BID_CAP && myTeam.squad.length < 25 &&
-        (!p.os || teamRoleCounts(myTeam).OS < 8) && maxSpendable(myTeam) >= nextReenterBid;
-      if (canReenter) {
-        let reentered = false;
-        for (let sec = 3; sec >= 1; sec--) {
-          window._gmLastChanceSec = sec;
-          setAIAuctioneerStatus(`⏳ <b>LAST CHANCE (${sec}s)!</b> Changed your mind on <b>${p.name}</b>? Tap <b>⚡ RE-ENTER &amp; BID (${fmtCr(nextReenterBid)})</b> before SOLD!`);
-          renderPodium();
-          beep(720 + (4 - sec) * 110, 0.07, 'sine', 0.09);
-          for (let tick = 0; tick < 10; tick++) {
-            if (state.curLeader === myId || !(state.passedTeams || []).includes(myId)) { reentered = true; break; }
-            if (!(await waitAuctioneerMs(100, token))) break;
-          }
-          if (reentered || token !== aiAuctLoopToken || aiAuctPaused) break;
-        }
-        window._gmLastChanceSec = 0;
+      // Non-blocking 3-second countdown after Going Twice (never waits on Pass/Bid)
+      let bidPlacedDuringCountdown = false;
+      for (let sec = 3; sec >= 1; sec--) {
+        window._gmLastChanceSec = sec;
+        const nextSnatchBid = Math.min(MAX_BID_CAP, state.curBid + nextInc(state.curBid));
+        setAIAuctioneerStatus(`⏳ Going Twice • Selling in <b>${sec}s</b> to <b>${state.curLeader}</b> (${fmtCr(state.curBid)})...`);
         renderPodium();
-        if (token !== aiAuctLoopToken || aiAuctPaused) break;
-        if (reentered) {
-          setAIAuctioneerStatus(`⚡ <b>${myId}</b> re-entered the war at <b>${fmtCr(state.curBid)}</b>! Polling rival tables...`);
-          if (!(await waitAuctioneerMs(voiceOn && !acceleratorMode ? 750 : 280, token))) break;
-          continue;
+        beep(720 + (4 - sec) * 110, 0.06, 'sine', 0.08);
+        for (let tick = 0; tick < 10; tick++) {
+          if (state.gavelStage === 0) { bidPlacedDuringCountdown = true; break; }
+          if (!(await waitAuctioneerMs(100, token))) break;
         }
+        if (bidPlacedDuringCountdown || token !== aiAuctLoopToken || aiAuctPaused) break;
+      }
+      window._gmLastChanceSec = 0;
+      renderPodium();
+      if (token !== aiAuctLoopToken || aiAuctPaused) break;
+      if (bidPlacedDuringCountdown) {
+        setAIAuctioneerStatus(`⚡ New bid at <b>${fmtCr(state.curBid)}</b> by <b>${state.curLeader}</b>! Checking rival response...`);
+        if (!(await waitAuctioneerMs(voiceOn && !acceleratorMode ? 650 : 240, token))) break;
+        continue;
       }
       setAIAuctioneerStatus(`🔨 SOLD! <b>${p.name}</b> goes to <b>${state.curLeader}</b> for <b>${fmtCr(state.curBid)}</b>!`);
       hammerSold();
