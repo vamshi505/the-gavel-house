@@ -433,3 +433,157 @@ function buildOfflineMatchOneLiner(winnerId, loserId, venueS, scoreA, margin, po
     `Clutch death bowling seals it! ${winnerId} overcome ${loserId} by ${margin} — POTM: ${potm}. ${injNote}`
   ]);
 }
+
+
+// ==================== 6. POSITION-AWARE SMART OFFLINE PLAYING XII ENGINE ====================
+function buildSmartOfflinePlayingXII(t, pitchDesc=''){
+  const pitchL = (pitchDesc || t.home || '').toLowerCase();
+  const homeShort = (pitchDesc || t.home || 'Home Ground').split(' (')[0];
+  const isSpinPitch = pitchL.includes('chepauk') || pitchL.includes('ekana') || pitchL.includes('jaipur') || pitchL.includes('spin');
+  const isFlatPitch = pitchL.includes('chinnaswamy') || pitchL.includes('uppal') || pitchL.includes('wankhede') || pitchL.includes('flat');
+
+  const pool = t.squad
+    .map(id => state.players[id])
+    .filter(p => p && !p.injured)
+    .sort((a, b) => b.ovr - a.ovr);
+
+  const xi = [];
+  const used = new Set();
+  let osCount = 0;
+
+  const canAdd = (p) => p && !used.has(p.id) && xi.length < 11 && (!p.os || osCount < 4);
+  const addPlayer = (p) => {
+    if (!canAdd(p)) return false;
+    xi.push(p);
+    used.add(p.id);
+    if (p.os) osCount++;
+    return true;
+  };
+  const pickBest = (pred, maxCount=1) => {
+    let added = 0;
+    for (const p of pool) {
+      if (added >= maxCount || xi.length >= 11) break;
+      if (canAdd(p) && pred(p)) {
+        addPlayer(p);
+        added++;
+      }
+    }
+    return added;
+  };
+
+  // STEP 1: Lock 1 Specialist Wicket-Keeper first (preferring highest OVR)
+  pickBest(p => p.role === 'WK', 1);
+
+  // STEP 2: Lock 2 Genuine Openers (#1-#2)
+  const curOpeners = () => xi.filter(p => battingPosScore(p) <= 18).length;
+  if (curOpeners() < 2) {
+    pickBest(p => p.role !== 'BW' && battingPosScore(p) <= 18, 2 - curOpeners());
+  }
+
+  // STEP 3: Lock No. 3 Anchor / Top-Order (#3)
+  pickBest(p => (p.role === 'B' || p.role === 'WK' || p.role === 'AR') && battingPosScore(p) > 18 && battingPosScore(p) <= 30, 1);
+
+  // STEP 4: Lock No. 4 Middle-Order Enforcer (#4)
+  pickBest(p => (p.role === 'B' || p.role === 'WK' || p.role === 'AR') && battingPosScore(p) > 30 && battingPosScore(p) <= 43, 1);
+
+  // STEP 5: Lock 1-2 Death Finishers / Finisher All-Rounders (#5-#6)
+  pickBest(p => (p.role !== 'BW') && (KNOWN_FINISHERS.has(p.name) || (p.phase && p.phase.includes('Finisher')) || (battingPosScore(p) > 43 && battingPosScore(p) <= 59)), 2);
+
+  // STEP 6: Lock Bowling Core (5-6 genuine bowling options, pitch-matched!)
+  const curSpinners = () => xi.filter(p => isSpinner(p) && (p.role === 'BW' || p.role === 'AR')).length;
+  const targetSpin = isSpinPitch ? 2 : 1;
+  if (curSpinners() < targetSpin) {
+    pickBest(p => (p.role === 'BW' || p.role === 'AR') && isSpinner(p), targetSpin - curSpinners());
+  }
+
+  // Guarantee at least 1 Death Pace specialist if available
+  const hasDeathPacer = () => xi.some(p => p.role === 'BW' && !isSpinner(p) && (p.phase === 'Death Pace' || (p.econ || 8.8) <= 8.1));
+  if (!hasDeathPacer()) {
+    pickBest(p => p.role === 'BW' && !isSpinner(p) && (p.phase === 'Death Pace' || (p.econ || 8.8) <= 8.1), 1);
+  }
+
+  // Guarantee at least 2-3 Pacers (flat/pace tracks prefer 3 pacers, spin tracks 2 pacers)
+  const curPacers = () => xi.filter(p => p.role === 'BW' && !isSpinner(p)).length;
+  const targetPacers = isSpinPitch ? 2 : 3;
+  if (curPacers() < targetPacers) {
+    pickBest(p => p.role === 'BW' && !isSpinner(p), targetPacers - curPacers());
+  }
+
+  // Ensure at least 5 total bowling options (BW + AR)
+  const curBowlers = () => xi.filter(p => p.role === 'BW' || p.role === 'AR').length;
+  if (curBowlers() < 5) {
+    pickBest(p => p.role === 'AR', Math.min(2, 5 - curBowlers()));
+  }
+  if (curBowlers() < 5) {
+    pickBest(p => p.role === 'BW' || p.role === 'AR', 5 - curBowlers());
+  }
+
+  // STEP 7: Fill remaining slots up to 11 (prefer batting depth on flat tracks, extra AR/spinner on spin tracks)
+  if (xi.length < 11 && isSpinPitch) {
+    pickBest(p => p.role === 'AR' || isSpinner(p), 11 - xi.length);
+  } else if (xi.length < 11 && isFlatPitch) {
+    pickBest(p => p.role === 'B' || p.role === 'AR', 11 - xi.length);
+  }
+  pickBest(() => true, 11 - xi.length);
+
+  // STEP 8: Sort cleanly into real IPL batting order #1 to #11
+  const orderedIds = autoSortBattingOrder(xi.map(p => p.id));
+  const orderedXI = orderedIds.map(id => state.players[id]).filter(Boolean);
+
+  // STEP 9: Pick smartest Impact Sub (Indian-only if 4 OS in XI)
+  const impact = pickWiseImpactSub(t, orderedIds, pitchDesc || t.home);
+
+  // STEP 10: Smart Captain & Vice-Captain selection (prefer Tier S/A Indian core or highest OVR star)
+  const leaderRank = [...orderedXI].sort((a, b) => {
+    const scoreA = a.ovr + (!a.os ? 3 : 0) + (a.role === 'B' || a.role === 'WK' || a.role === 'AR' ? 2 : 0);
+    const scoreB = b.ovr + (!b.os ? 3 : 0) + (b.role === 'B' || b.role === 'WK' || b.role === 'AR' ? 2 : 0);
+    return scoreB - scoreA;
+  });
+  const captainId = leaderRank[0]?.id ?? null;
+  const vcId = leaderRank[1]?.id ?? null;
+
+  // Build specific tactical note
+  const openers = orderedXI.slice(0, 2).map(p => p.name.split(' ').slice(-1)[0]).join(' & ');
+  const bowlersCount = orderedXI.filter(p => p.role === 'BW' || p.role === 'AR').length;
+  const spinCount = orderedXI.filter(p => isSpinner(p) && (p.role === 'BW' || p.role === 'AR')).length;
+  const note = `Position-balanced for ${homeShort}: ${openers} open, ${bowlersCount} bowling options (${spinCount} spin)${impact ? `, ⚡${impact.name} as Impact Sub` : ''}.`;
+
+  return { xi: orderedXI, xiIds: orderedIds, impact, captainId, vcId, note };
+}
+
+// ==================== 7. OFFLINE TEAM VS TEAM TACTICAL COMPARISON ====================
+function buildOfflineTeamComparison(tA, tB, venue, probA){
+  const vL = (venue || '').toLowerCase();
+  const isSpinV = vL.includes('chepauk') || vL.includes('ekana') || vL.includes('spin');
+  const isFlatV = vL.includes('chinnaswamy') || vL.includes('uppal') || vL.includes('flat');
+
+  const namesA = tA.xiText.split(',').map(s => s.replace(/\(.*?\)|\|.*/g, '').trim()).filter(Boolean);
+  const namesB = tB.xiText.split(',').map(s => s.replace(/\(.*?\)|\|.*/g, '').trim()).filter(Boolean);
+  const starA = namesA[0] || tA.name;
+  const starB = namesB[0] || tB.name;
+  const bowlA = namesA[Math.min(namesA.length - 1, 8)] || namesA[namesA.length - 1] || 'frontline attack';
+  const bowlB = namesB[Math.min(namesB.length - 1, 8)] || namesB[namesB.length - 1] || 'frontline attack';
+
+  const winner = probA >= 50 ? tA.name : tB.name;
+  const loser = probA >= 50 ? tB.name : tA.name;
+  const edgeA = isFlatV ? `Top-order firepower led by ${starA}` : isSpinV ? `Middle-overs control & spin depth` : `Balanced core around ${starA}`;
+  const edgeB = isFlatV ? `Explosive chasing potential via ${starB}` : isSpinV ? `Disciplined bowling unit with ${bowlB}` : `Strong XI versatility led by ${starB}`;
+
+  const rA = {
+    bat: +Math.min(9.6, Math.max(6.0, tA.estRating + (isFlatV ? 0.3 : 0))).toFixed(1),
+    bowl: +Math.min(9.6, Math.max(6.0, tA.estRating - 0.1 + (isSpinV ? 0.2 : 0))).toFixed(1),
+    depth: +Math.min(9.5, Math.max(6.0, tA.estRating - 0.1)).toFixed(1),
+    edge: edgeA
+  };
+  const rB = {
+    bat: +Math.min(9.6, Math.max(6.0, tB.estRating + (isFlatV ? 0.2 : 0))).toFixed(1),
+    bowl: +Math.min(9.6, Math.max(6.0, tB.estRating - 0.1 + (isSpinV ? 0.3 : 0))).toFixed(1),
+    depth: +Math.min(9.5, Math.max(6.0, tB.estRating - 0.1)).toFixed(1),
+    edge: edgeB
+  };
+
+  const keyBattle = `${starA} vs ${bowlB} in the Powerplay, plus ${starB} vs ${bowlA} under pressure.`;
+  const verdict = `${winner} holds the tactical edge on ${venue} thanks to superior XI balance and phase coverage. ${loser} will need an explosive start from their top order to overcome ${winner}'s bowling depth.`;
+
+  return { ratingsA: rA, ratingsB: rB, winner, keyBattle, verdict };
+}

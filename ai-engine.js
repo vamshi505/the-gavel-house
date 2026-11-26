@@ -1015,7 +1015,26 @@ ${teamDesc}
 Return ONLY valid JSON: {"CSK": {"emoji": "😱", "label": "Shocked", "text": "..."}, ...}`;
 
   const aiMap = await callGeminiJSON(prompt, 0.9);
-  if (!aiMap) return;
+  if (!aiMap) {
+    const isHighPrice = price >= 1400 || price >= p.fairVal * 1.14;
+    const isSteal = price <= p.fairVal * 0.80 && p.tier !== 'C';
+    const winStars = winTeam.squad.map(id => state.players[id]).filter(Boolean).sort((a,b) => b.ovr - a.ovr);
+    const otherWinStars = winStars.filter(x => x.id !== p.id).slice(0, 2).map(x => x.name);
+    losers.forEach((lid, idx) => {
+      const lt = state.teams.find(x => x.id === lid);
+      if (!lt) return;
+      const msg = buildOfflineSoldLoserMsg(lt, winTeam, p, price, isHighPrice, idx);
+      lt.chatter = msg;
+      addReaction(`💬 <b style="color:${lt.color}">${lt.id}:</b> <i>"${msg}"</i>`, lt.color);
+    });
+    if (watchers[0]) {
+      const smsg = buildOfflineSoldWatcherMsg(watchers[0], winTeam, p, price, isSteal, isHighPrice, otherWinStars);
+      watchers[0].chatter = `👀 ${smsg}`;
+      addReaction(`👀 <b style="color:${watchers[0].color}">${watchers[0].id}:</b> <i>"${smsg}"</i>`, watchers[0].color);
+    }
+    renderTeams();
+    return;
+  }
   pickIds.forEach(id => {
     const item = aiMap[id];
     const t = state.teams.find(x => x.id === id);
@@ -1404,9 +1423,7 @@ async function sendTalk(preset){
     if (wEl) wEl.remove();
   }
 
-  if (getSavedApiKey() && !liveMap) {
-    feed.innerHTML += `<div class="msg" style="border-left-color:#f59e0b;font-size:11px">⚠️ <b>Gemini API Busy (${lastGeminiError || 'Timeout'}):</b> Using Smart Persona Engine so tables stay responsive.</div>`;
-  }
+
   targets.forEach(t => {
     let reply = '', stance = 'NEUTRAL';
     if (liveMap && liveMap[t.id]) {
@@ -2421,6 +2438,8 @@ Return ONLY valid JSON:
     const fitIds = aiReport.bestFits.slice(0, 3).map(x => x.teamId).join(', ');
     addReaction(`🔍 <b>SCOUT REPORT (${p.name}):</b> Best pitch fit → <b>${fitIds}</b>. <i>${aiReport.summary || ''}</i>`, '#0f766e');
     saveState();
+  } else if (state.curId === p.id) {
+    renderScoutDossier(p, baseline, false);
   }
 }
 
@@ -2437,7 +2456,7 @@ function renderScoutDossier(p, rep, loadingAI=false){
   } else if (!rep._offline) {
     lbl.textContent = '🤖 GEMINI AI SCOUTING & PITCH FIT REPORT';
   } else {
-    lbl.textContent = '🔍 SMART SCOUTING & PITCH FIT (ADD GEMINI KEY FOR WEB STATS)';
+    lbl.textContent = '🔍 SMART SCOUTING & PITCH FIT ENGINE';
   }
 
   statsRow.innerHTML = (rep.stats || []).slice(0, 3).map(s => `<span class="scout-stat-pill">${s}</span>`).join('');

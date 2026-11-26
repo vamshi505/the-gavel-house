@@ -274,29 +274,37 @@ function renderSquads(){
   const hasLockedXI = Array.isArray(t.customXI) && t.customXI.length === 11 && t.customXI.every(id => t.squad.includes(id));
   const players = t.squad.map(id=>state.players[id]).filter(Boolean).sort((a,b)=>b.soldPrice-a.soldPrice);
 
-  // Auto-trigger Gemini to pick Playing XII directly once squad has 11+ players and API key is saved!
-  if (t.squad.length >= 11 && !hasLockedXI && getSavedApiKey() && !aiPickingInProgress[t.id] && !t._autoPickTried) {
-    t._autoPickTried = true;
-    setTimeout(() => aiPickPlayingXII(t.id, false, true), 120);
+  // Auto-build Position-Aware Smart Playing XII immediately once squad has 11+ players (works 100% offline!)
+  if (t.squad.length >= 11 && !hasLockedXI && !aiPickingInProgress[t.id]) {
+    if (typeof buildSmartOfflinePlayingXII === 'function') {
+      const smart = buildSmartOfflinePlayingXII(t, t.home);
+      t.customXI = [...smart.xiIds];
+      t.customImpact = smart.impact ? smart.impact.id : null;
+      if (!t.captainId || !t.customXI.includes(t.captainId)) t.captainId = smart.captainId;
+      if (!t.vcId || !t.customXI.includes(t.vcId) || t.vcId === t.captainId) t.vcId = smart.vcId;
+      t.xiSource = 'SMART';
+      t.xiNote = smart.note;
+    }
   }
+  const hasReadyXI = Array.isArray(t.customXI) && t.customXI.length === 11 && t.customXI.every(id => t.squad.includes(id));
 
   let xiBlock = '';
   if (t.squad.length >= 11) {
     if (aiPickingInProgress[t.id]) {
       xiBlock = `
         <div style="background:var(--gold-dim);border:1px solid var(--gold);border-radius:14px;padding:12px;margin-bottom:10px;text-align:center">
-          <div style="font-size:12px;font-weight:800;color:var(--gold)">🤖 GEMINI HEAD COACH PICKING PLAYING XII...</div>
+          <div style="font-size:12px;font-weight:800;color:var(--gold)">🧠 SMART HEAD COACH PICKING PLAYING XII...</div>
           <div style="font-size:11px;color:var(--muted);margin-top:3px">Analysing ${t.home} pitch, batting order, wicketkeeper, 5+ bowling options &amp; 4 OS cap...</div>
         </div>`;
-    } else if (hasLockedXI) {
+    } else if (hasReadyXI) {
       const { xi, impact } = computePlayingXII(t);
-      const badgeText = t.xiSource === 'MANUAL' ? '✏️ MANAGER CUSTOM PLAYING XII' : '🤖 GEMINI PITCH-BALANCED PLAYING XII';
+      const badgeText = t.xiSource === 'MANUAL' ? '✏️ MANAGER CUSTOM PLAYING XII' : t.xiSource === 'GEMINI' ? '🤖 GEMINI PITCH-BALANCED PLAYING XII' : '🧠 SMART COACH PITCH-BALANCED PLAYING XII';
       xiBlock = `
         <div style="background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.35);border-radius:14px;padding:11px;margin-bottom:10px">
           <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;flex-wrap:wrap;margin-bottom:7px">
             <div style="font-size:11px;font-weight:800;color:#10b981;letter-spacing:0.6px">${badgeText} (${t.home.split(' (')[0]})</div>
             <div style="display:flex;gap:5px">
-              <button class="btn btn-sm btn-blue" style="padding:4px 8px;font-size:10.5px" onclick="aiPickPlayingXII('${t.id}')">🤖 Re-Pick Gemini</button>
+              <button class="btn btn-sm btn-blue" style="padding:4px 8px;font-size:10.5px" onclick="aiPickPlayingXII('${t.id}')">🧠 Re-Pick Smart XII</button>
               <button class="btn btn-sm btn-gold" style="padding:4px 8px;font-size:10.5px" onclick="openXIEditor('${t.id}')">✏️ Edit Manually</button>
             </div>
           </div>
@@ -304,16 +312,6 @@ function renderSquads(){
           <div style="display:flex;flex-wrap:wrap;gap:5px">
             ${xi.map((p,i)=>`<span class="tag">${i+1}. ${p.name}${t.captainId===p.id?' ©':t.vcId===p.id?' (VC)':''}${getFormBadge(p.id)} <span style="opacity:0.65">(${p.role})</span>${p.os?' ✈️':''}</span>`).join('')}
             ${impact ? `<span class="tag" style="background:var(--gold-dim);color:var(--gold);border-color:var(--gold)">⚡ Impact: ${impact.name}</span>` : ''}
-          </div>
-        </div>`;
-    } else {
-      xiBlock = `
-        <div style="background:var(--input-bg);border:1px dashed var(--gold);border-radius:14px;padding:12px;margin-bottom:10px;text-align:center">
-          <div style="font-size:12px;font-weight:800;color:var(--gold);margin-bottom:4px">🤖 PLAYING XII AWAITING GEMINI HEAD COACH</div>
-          <div style="font-size:11.5px;color:var(--muted);margin-bottom:9px">Gemini picks the balanced batting order, bowling attack, Captain &amp; Impact Sub for <b>${t.home}</b>—then you can edit manually anytime.</div>
-          <div class="btn-row" style="margin-top:0">
-            <button class="btn btn-blue btn-sm" onclick="aiPickPlayingXII('${t.id}')">🤖 Let Gemini Pick XII</button>
-            <button class="btn btn-sm" onclick="openXIEditor('${t.id}')">✏️ Pick Manually</button>
           </div>
         </div>`;
     }

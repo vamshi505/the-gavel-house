@@ -66,78 +66,14 @@ function pickWiseImpactSub(t, xiIds, pitchDesc=''){
   const xiBowlers = xiPlayers.filter(p => p.role === 'BW' || p.role === 'AR').length;
   const xiSpinners = xiPlayers.filter(p => isSpinner(p)).length;
   const xiHasWK = xiPlayers.some(p => p.role === 'WK');
-  const pitchL = (pitchDesc || t.home || '').toLowerCase();
-  const isSpinPitch = pitchL.includes('chepauk') || pitchL.includes('ekana') || pitchL.includes('jaipur') || pitchL.includes('spin');
-
-  let bench = t.squad
-    .map(id => state.players[id])
-    .filter(p => p && !xiSet.has(p.id) && (osInXI >= 4 ? !p.os : true));
-
-  if (!bench.length) {
-    bench = t.squad.map(id => state.players[id]).filter(p => p && !xiSet.has(p.id));
+  if (typeof buildSmartOfflinePlayingXII === 'function') {
+    const smart = buildSmartOfflinePlayingXII(t, pitchDesc);
+    return { xi: smart.xi, impact: smart.impact };
   }
-  if (!bench.length) return null;
-
-  const scored = bench.map(p => {
-    let sc = p.ovr;
-    if (p.role === 'WK' && xiHasWK) sc -= 12;
-    if (xiBowlers <= 5 && (p.role === 'BW' || p.role === 'AR')) sc += 9;
-    if (xiBowlers >= 6 && (p.role === 'B' || KNOWN_FINISHERS.has(p.name))) sc += 10;
-    if (isSpinPitch && isSpinner(p) && xiSpinners < 2) sc += 11;
-    return { p, sc };
-  }).sort((a, b) => b.sc - a.sc);
-
-  return scored[0].p;
-}
-
-function sanitizeImpactForXI(t, xiIds, curImpactId, pitchDesc=''){
-  const xiSet = new Set(xiIds);
-  const osInXI = xiIds.filter(id => state.players[id]?.os).length;
-  const cand = (curImpactId !== null && curImpactId !== undefined) ? state.players[curImpactId] : null;
-  const isValidCand = cand && t.squad.includes(cand.id) && !xiSet.has(cand.id) && !(osInXI >= 4 && cand.os);
-  if (isValidCand) return cand;
-  return pickWiseImpactSub(t, xiIds, pitchDesc);
-}
-
-function computePlayingXII(t, pitchDesc=''){
-  const validSet = new Set(t.squad);
-  if (Array.isArray(t.customXI) && t.customXI.length === 11 && t.customXI.every(id => validSet.has(id))) {
-    const xi = t.customXI.map(id => state.players[id]).filter(Boolean);
-    const impact = sanitizeImpactForXI(t, t.customXI, t.customImpact, pitchDesc);
-    t.customImpact = impact ? impact.id : null;
-    if (xi.length === 11) return { xi, impact };
-  }
-
-  const pitchL = (pitchDesc || t.home || '').toLowerCase();
-  const isSpinPitch = pitchL.includes('chepauk') || pitchL.includes('ekana') || pitchL.includes('jaipur') || pitchL.includes('spin');
   const sorted = t.squad.map(id=>state.players[id]).filter(Boolean).sort((a,b)=>b.ovr-a.ovr);
-  const xi = [];
-  let os = 0;
-  const pickCond = (fn, maxCount) => {
-    let added = 0;
-    for (const p of sorted) {
-      if (added >= maxCount || xi.length >= 11) break;
-      if (xi.includes(p) || !fn(p)) continue;
-      if (p.os && os >= 4) continue;
-      xi.push(p); if (p.os) os++; added++;
-    }
-  };
-  pickCond(p => p.role === 'WK', 1);
-  pickCond(p => p.role === 'B', 3);
-  pickCond(p => p.role === 'AR', 2);
-  if (isSpinPitch) {
-    pickCond(p => p.role === 'BW' && isSpinner(p), 2);
-    pickCond(p => p.role === 'BW' && !isSpinner(p), 2);
-  } else {
-    pickCond(p => p.role === 'BW' && !isSpinner(p), 3);
-    pickCond(p => p.role === 'BW' && isSpinner(p), 1);
-  }
-  pickCond(() => true, 11);
-
+  const xi = sorted.slice(0, 11);
   const orderedIds = autoSortBattingOrder(xi.map(p => p.id));
-  const orderedXI = orderedIds.map(id => state.players[id]);
-  const impact = pickWiseImpactSub(t, orderedIds, pitchDesc);
-  return { xi: orderedXI, impact };
+  return { xi: orderedIds.map(id => state.players[id]), impact: pickWiseImpactSub(t, orderedIds, pitchDesc) };
 }
 
 function openXIEditor(tid){
@@ -362,23 +298,43 @@ function validateAndApplyGeminiXI(t, res, pitchDesc=''){
   return { xi: finalXI, impact: impId };
 }
 
+function applySmartOfflineXII(t, targetPitch, fromEditor=false, silent=false){
+  const smart = buildSmartOfflinePlayingXII(t, targetPitch || t.home);
+  t.customXI = [...smart.xiIds];
+  t.customImpact = smart.impact ? smart.impact.id : null;
+  if (!t.captainId || !t.customXI.includes(t.captainId)) t.captainId = smart.captainId;
+  if (!t.vcId || !t.customXI.includes(t.vcId) || t.vcId === t.captainId) t.vcId = smart.vcId;
+  t.xiSource = 'SMART';
+  t.xiNote = smart.note;
+  if (fromEditor) {
+    tempXIIds = [...t.customXI];
+    tempImpactId = t.customImpact;
+    renderXIEditorList();
+  }
+  if (!silent) {
+    sfxTrade();
+    showToast(`🧠 Smart Coach locked ${t.id} Playing XII!`);
+  }
+  renderSquads();
+  saveState();
+  return smart;
+}
+
 async function aiPickPlayingXII(tid, fromEditor=false, silent=false, customPitch=''){
   const t = state.teams.find(x => x.id === tid);
   if (!t || t.squad.length < 11) { if (!silent) showToast(`${tid} needs at least 11 players first!`); return; }
-  if (!getSavedApiKey()) {
-    const fb = computePlayingXII(t, customPitch || t.home);
-    t.customXI = fb.xi.map(p => p.id);
-    t.customImpact = fb.impact ? fb.impact.id : null;
-    if (fromEditor) { tempXIIds = [...t.customXI]; tempImpactId = t.customImpact; renderXIEditorList(); }
-    if (!silent) showToast('Applied smart pitch-balanced offline XII.');
-    renderSquads(); saveState();
+  const targetPitch = customPitch || t.home;
+
+  // If no user API key or in cooldown, run Smart Offline Coach immediately!
+  const hasRealKey = (typeof getSavedApiKeys === 'function' && getSavedApiKeys().length > 0);
+  if (!hasRealKey && !getSavedApiKey()) {
+    applySmartOfflineXII(t, targetPitch, fromEditor, silent);
     return;
   }
   if (aiPickingInProgress[tid]) return;
   aiPickingInProgress[tid] = true;
   if (!fromEditor) renderSquads();
 
-  const targetPitch = customPitch || t.home;
   const prompt = `Pick Playing XI (11 unique IDs in batting order #1-#11) + 1 Impact Sub for ${t.name} (${t.id}) on ${targetPitch}.
 Squad:
 ${formatSquadForGeminiPrompt(t)}
@@ -389,11 +345,11 @@ Rules:
 3) STRICT REAL-WORLD BATTING ORDER: Put Opener(#1-2) at #1-#2, No.3(#3) at #3, Middle(#4) at #4, Finisher(#5-6) at #5-#6, LowerAR(#6-7) at #6-#7, and Bowler(#8-11) at #8-#11.
 Return ONLY valid JSON: {"xi": [11 ids], "impact": id, "captainId": id, "vcId": id, "note": "short reason"}`;
 
-  const res = await callGeminiJSON(prompt, 0.35, 6500);
+  const res = await callGeminiJSON(prompt, 0.35, 5500);
   aiPickingInProgress[tid] = false;
   if (!res || !Array.isArray(res.xi)) {
-    if (!silent) showToast(`AI XI fallback: ${lastGeminiError || 'offline mode'}`);
-    renderSquads();
+    // Seamless Smart Offline Engine fallback — ALWAYS selects & saves an accurate Playing XII!
+    applySmartOfflineXII(t, targetPitch, fromEditor, silent);
     return;
   }
   const applied = validateAndApplyGeminiXI(t, res, targetPitch);
@@ -403,13 +359,15 @@ Return ONLY valid JSON: {"xi": [11 ids], "impact": id, "captainId": id, "vcId": 
 }
 
 async function aiPickAllPlayingXIIs(){
-  if (!getSavedApiKey()) { showToast('Add a Gemini API key in Settings for AI XI selection.'); return; }
-  const minSq = Math.min(...state.teams.map(t => t.squad.length));
-  if (minSq < 11) { showToast('All teams need at least 11 players first.'); return; }
-  for (const t of state.teams) {
-    await aiPickPlayingXII(t.id, false, true);
+  const eligible = state.teams.filter(t => t.squad.length >= 11);
+  if (!eligible.length) { showToast('Teams need at least 11 players signed first.'); return; }
+  const hasUserKey = (typeof getSavedApiKeys === 'function' && getSavedApiKeys().length > 0);
+  for (const t of eligible) {
+    if (hasUserKey) await aiPickPlayingXII(t.id, false, true);
+    else applySmartOfflineXII(t, t.home, false, true);
   }
-  showToast('Updated Playing XIIs for all 10 teams.');
+  sfxTrade();
+  showToast(`🧠 Smart Playing XIIs locked for ${eligible.length} franchise(s)!`);
   renderAll(); saveState();
 }
 
@@ -559,7 +517,7 @@ Return ONLY valid JSON: {"CSK": {"overall": 8.4, "bat": 8.2, "bowl": 8.6, "ar": 
   baseReports.sort((a,b) => b.ev.overall - a.ev.overall);
   wrap.innerHTML = `
     <div class="panel">
-      <div class="sec-title" style="margin-bottom:10px">🧠 Senior Analyst Squad Grades ${baseReports[0]?.ev.aiReviewed ? '(Powered by Gemini AI)' : '(Offline Mode)'}</div>
+      <div class="sec-title" style="margin-bottom:10px">🧠 Senior Analyst Squad Grades ${baseReports[0]?.ev.aiReviewed ? '(Powered by Gemini AI)' : '(Smart Tactical Engine)'}</div>
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:9px">
         ${baseReports.map((r,idx) => `
           <div style="background:rgba(255,255,255,0.04);border:1px solid var(--card-border);border-top:3px solid ${r.t.color};border-radius:12px;padding:11px">
@@ -1682,11 +1640,20 @@ async function runTeamComparison(){
 
   let probA = Math.min(78, Math.max(22, Math.round(50 + (tA.estRating - tB.estRating) * 11)));
   let probB = 100 - probA;
-  let ratingsA = { bat: tA.estRating, bowl: tA.estRating, depth: tA.estRating };
-  let ratingsB = { bat: tB.estRating, bowl: tB.estRating, depth: tB.estRating };
-  let winner = probA >= probB ? tA.name : tB.name;
-  let verdict = `Based on overall player quality, ${winner} holds a slight edge on ${venue}. Connect your Gemini API key in ⚙️ Settings for a full tactical Senior Analyst breakdown!`;
-  let keyBattle = 'Top-order powerplay batters vs new-ball pace attack';
+  const offCmp = (typeof buildOfflineTeamComparison === 'function')
+    ? buildOfflineTeamComparison(tA, tB, venue, probA)
+    : {
+        ratingsA: { bat: tA.estRating, bowl: tA.estRating, depth: tA.estRating },
+        ratingsB: { bat: tB.estRating, bowl: tB.estRating, depth: tB.estRating },
+        winner: probA >= probB ? tA.name : tB.name,
+        keyBattle: 'Top-order powerplay batters vs new-ball pace attack',
+        verdict: `Based on squad balance and phase coverage, ${probA >= probB ? tA.name : tB.name} holds the edge on ${venue}.`
+      };
+  let ratingsA = offCmp.ratingsA;
+  let ratingsB = offCmp.ratingsB;
+  let winner = offCmp.winner;
+  let verdict = offCmp.verdict;
+  let keyBattle = offCmp.keyBattle;
   let aiPowered = false;
 
   if (getSavedApiKey()) {
@@ -1724,7 +1691,7 @@ Return ONLY valid JSON: {"probA": 58, "a": {"bat": 8.8, "bowl": 8.2, "depth": 8.
   wrap.innerHTML = `
     <div class="panel" style="border-color:var(--gold)">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-        <div class="sec-title">⚔️ HEAD-TO-HEAD VERDICT ${aiPowered ? '(GEMINI AI)' : '(OFFLINE)'}</div>
+        <div class="sec-title">⚔️ HEAD-TO-HEAD VERDICT ${aiPowered ? '(GEMINI AI)' : '(SMART ENGINE)'}</div>
         <span class="pill pill-live">🏆 EDGE: ${winner}</span>
       </div>
 
