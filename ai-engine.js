@@ -106,7 +106,7 @@ function evaluatePlayerForTeam(team, p, stretch=1.0){
   const aiScout = (state.scoutCache && state.scoutCache[p.id]) ? state.scoutCache[p.id] : null;
   const effAge = (aiScout && typeof aiScout.age === 'number') ? aiScout.age : prof.age;
   const effCap = (aiScout && typeof aiScout.isCaptain === 'boolean') ? aiScout.isCaptain : prof.isCaptain;
-  const effAvail = (aiScout && aiScout.availability) ? String(aiScout.availability) : prof.avail;
+  const effAvail = !p.os ? 'Full Season' : ((aiScout && aiScout.availability) ? String(aiScout.availability) : prof.avail);
   const effInj = (aiScout && aiScout.injuryRisk) ? String(aiScout.injuryRisk) : prof.injRisk;
   const effForm = (aiScout && aiScout.recentForm) ? String(aiScout.recentForm) : prof.formTag;
 
@@ -2468,7 +2468,7 @@ Return ONLY valid JSON:
 {
   "age": 27,
   "isCaptain": false,
-  "availability": "Full Season" or "Partial / Int'l Clash",
+  "availability": "Full Season" (ALWAYS "Full Season" for Indian players; only Overseas players can have "Partial / Intl Clash"),
   "injuryRisk": "Low" or "Med" or "High",
   "recentForm": "Red Hot" or "Steady" or "Cold",
   "realisticMaxCr": 14.5,
@@ -2484,6 +2484,7 @@ Return ONLY valid JSON:
   const aiReport = await callGeminiGroundedScout(prompt);
   if (aiReport && Array.isArray(aiReport.bestFits) && aiReport.bestFits.length) {
     if (!state.scoutCache) state.scoutCache = {};
+    if (!p.os) aiReport.availability = 'Full Season';
     state.scoutCache[p.id] = aiReport;
 
     // Apply tactical suitability boost (+₹1.25 Cr to #1 fit, +₹75 L to #2 fit, +₹50 L to #3 fit) so AI GMs react!
@@ -2524,7 +2525,7 @@ function renderScoutDossier(p, rep, loadingAI=false){
   const prof = (typeof getPlayerMarketProfile === 'function') ? getPlayerMarketProfile(p) : { age:27, isCaptain:false, avail:'Full Season', injRisk:'Low', formTag:'Steady' };
   const sAge = (typeof rep.age === 'number') ? rep.age : prof.age;
   const sCap = (typeof rep.isCaptain === 'boolean') ? rep.isCaptain : prof.isCaptain;
-  const sAvail = rep.availability || prof.avail;
+  const sAvail = !p.os ? 'Full Season' : (rep.availability || prof.avail);
   const sInj = rep.injuryRisk || prof.injRisk;
   const sForm = rep.recentForm || prof.formTag;
   const metaPills = [
@@ -2996,27 +2997,26 @@ async function startAIAuctioneerLoop(){
     if (token !== aiAuctLoopToken || aiAuctPaused) break;
 
     if (aiBidPlaced) {
-      // NO-TIMER GM DECISION: Wait patiently until YOU click Bid or Pass (zero rushed 2s countdown!)
-      const stillCanBid = myTeam && !(state.passedTeams || []).includes(myId) && state.curLeader !== myId &&
-        myTeam.squad.length < 25 && (!p.os || teamRoleCounts(myTeam).OS < 8) &&
-        state.curBid < MAX_BID_CAP && maxSpendable(myTeam) >= (state.curBid + nextInc(state.curBid));
-      if (stillCanBid) {
-        const prevLeader = state.curLeader;
-        const prevBid = state.curBid;
-        setAIAuctioneerStatus(`✋ <b>${prevLeader}</b> leads at <b>${fmtCr(prevBid)}</b> — Take your time (${myId}): tap <b>BID</b> or <b>PASS</b>.`);
-        while (token === aiAuctLoopToken && !aiAuctPaused) {
-          if (state.curLeader === myId || state.curBid !== prevBid || (state.passedTeams || []).includes(myId)) break;
-          if (humanProxyCapLakhs > 0 && (state.curBid + nextInc(state.curBid)) <= humanProxyCapLakhs) break;
-          if (!(await waitAuctioneerMs(80, token))) break;
-        }
-        if (token !== aiAuctLoopToken || aiAuctPaused) break;
-        // If YOU just placed a bid, pause briefly so the announcer speaks your bid cleanly before rivals counter!
-        if (state.curLeader === myId) {
-          if (!(await waitAuctioneerMs(voiceOn && !acceleratorMode ? 800 : 280, token))) break;
-        }
-      } else {
-        // User already passed — zip through AI-vs-AI war fast!
-        if (!(await waitAuctioneerMs(aiAuctSpeedLevel===3 ? 60 : fast ? 110 : 220, token))) break;
+      // REAL-TIME IPL AUCTION FLOW: 9 AI tables keep bidding continuously without freezing!
+      // You can jump in with BID or PASS at any second, or wait and snatch at the end.
+      const prevBid = state.curBid;
+      const userPassed = (state.passedTeams || []).includes(myId);
+      const beatMs = userPassed
+        ? (aiAuctSpeedLevel === 3 ? 80 : fast ? 140 : 260)
+        : (aiAuctSpeedLevel === 3 ? 280 : fast ? 520 : 950);
+
+      setAIAuctioneerStatus(`🔥 <b>${state.curLeader}</b> leads at <b>${fmtCr(prevBid)}</b> — Rivals bidding live! Jump in with <b>BID</b> anytime.`);
+      let elapsed = 0;
+      while (elapsed < beatMs && token === aiAuctLoopToken && !aiAuctPaused) {
+        if (state.curLeader === myId || state.curBid !== prevBid) break;
+        if (!userPassed && (state.passedTeams || []).includes(myId)) break;
+        if (!(await waitAuctioneerMs(50, token))) break;
+        elapsed += 50;
+      }
+      if (token !== aiAuctLoopToken || aiAuctPaused) break;
+      // If YOU just placed a bid, pause briefly so the announcer speaks your bid cleanly before rivals counter!
+      if (state.curLeader === myId) {
+        if (!(await waitAuctioneerMs(voiceOn && !acceleratorMode ? 750 : 260, token))) break;
       }
       continue;
     }
@@ -3051,21 +3051,31 @@ async function startAIAuctioneerLoop(){
 
     // 6. Someone leads & 9 AI bots are quiet -> Going Once -> Going Twice -> SOLD!
     if (state.gavelStage === 0) {
-      setAIAuctioneerStatus(`🔔 Going Once at <b>${fmtCr(state.curBid)}</b> to <b>${state.curLeader}</b>...`);
+      setAIAuctioneerStatus(`🔔 Going Once at <b>${fmtCr(state.curBid)}</b> to <b>${state.curLeader}</b> — tap <b>BID</b> to jump in!`);
       callGoingOnce();
-      if (!(await waitAuctioneerMs(voiceOn ? 1150 : (fast ? 420 : 800), token))) break;
+      const onceMs = voiceOn ? 1400 : (fast ? 650 : 1100);
+      for (let t = 0; t < onceMs; t += 60) {
+        if (state.gavelStage === 0 || state.curLeader === myId) break;
+        if (!(await waitAuctioneerMs(60, token))) break;
+      }
+      if (token !== aiAuctLoopToken || aiAuctPaused) break;
       continue;
     }
     if (state.gavelStage === 1) {
-      setAIAuctioneerStatus(`🔥 Going Twice at <b>${fmtCr(state.curBid)}</b> to <b>${state.curLeader}</b> — Final Call!`);
+      setAIAuctioneerStatus(`🔥 Going Twice at <b>${fmtCr(state.curBid)}</b> to <b>${state.curLeader}</b> — Final Call! Tap <b>BID</b> to snatch!`);
       callGoingTwice();
-      if (!(await waitAuctioneerMs(voiceOn ? 1250 : (fast ? 450 : 850), token))) break;
+      const twiceMs = voiceOn ? 1500 : (fast ? 700 : 1200);
+      for (let t = 0; t < twiceMs; t += 60) {
+        if (state.gavelStage === 0 || state.curLeader === myId) break;
+        if (!(await waitAuctioneerMs(60, token))) break;
+      }
+      if (token !== aiAuctLoopToken || aiAuctPaused) break;
       continue;
     }
     if (state.gavelStage >= 2) {
-      // 3-SECOND LAST-CHANCE RE-ENTRY WINDOW if Human GM passed earlier & can still afford the next bid!
+      // 3-SECOND LAST-CHANCE WINDOW if Human GM isn't leading & can still afford the next bid (works whether you passed or stayed quiet!)
       const nextReenterBid = Math.min(MAX_BID_CAP, state.curBid + nextInc(state.curBid));
-      const canReenter = myTeam && (state.passedTeams || []).includes(myId) && state.curLeader !== myId &&
+      const canReenter = myTeam && state.curLeader !== myId &&
         state.curBid < MAX_BID_CAP && myTeam.squad.length < 25 &&
         (!p.os || teamRoleCounts(myTeam).OS < 8) && maxSpendable(myTeam) >= nextReenterBid;
       if (canReenter) {

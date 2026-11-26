@@ -1064,7 +1064,7 @@ function getPlayerMarketProfile(p){
   const age = p.age || KNOWN_AGES[p.name] || (p.set === 'Set 4' || (p.set && p.set.startsWith('U')) ? (19 + (h % 7)) : (24 + (h % 9)));
   const isCaptain = PROVEN_CAPTAINS.has(p.name);
   const injRisk = INJURY_PRONE_PLAYERS.has(p.name) ? 'High' : (p.role === 'BW' && !isSpinner(p) && age >= 32) ? 'Med' : 'Low';
-  const avail = PARTIAL_AVAIL_RISK.has(p.name) ? 'Int\'l Clash Risk' : 'Full Season';
+  const avail = !p.os ? 'Full Season' : (PARTIAL_AVAIL_RISK.has(p.name) ? 'Int\'l Clash Risk' : 'Full Season');
   const formTag = (p.ovr >= 91 && age <= 31) ? 'Red Hot' : (age >= 36 ? 'Veteran' : (h % 5 === 0 ? 'Hot' : h % 7 === 0 ? 'Mixed' : 'Steady'));
   return { age, isCaptain, avail, injRisk, formTag };
 }

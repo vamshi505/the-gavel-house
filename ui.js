@@ -47,15 +47,17 @@ function renderPodium(){
     const hb = document.getElementById('btnHumanBid');
     const hp = document.getElementById('btnHumanPass');
     const alreadyPassed = (state.passedTeams || []).includes(myActiveTeamId);
-    const inLastChance = Boolean(window._gmLastChanceSec && window._gmLastChanceSec > 0 && alreadyPassed && !atCap && state.curLeader !== myActiveTeamId);
-    hb.disabled = atCap || state.curLeader === myActiveTeamId || (alreadyPassed && !inLastChance);
+    const inLastChance = Boolean(window._gmLastChanceSec && window._gmLastChanceSec > 0 && !atCap && state.curLeader !== myActiveTeamId);
+    hb.disabled = atCap || state.curLeader === myActiveTeamId;
     hb.textContent = atCap
       ? `🔒 ₹25.00 Cr CAP HIT`
       : state.curLeader === myActiveTeamId
         ? `👑 YOU LEAD (${fmtCr(state.curBid)})`
         : inLastChance
-          ? `⚡ RE-ENTER & BID ${myActiveTeamId} (${fmtCr(nextB)}) • ${window._gmLastChanceSec}s`
-          : `✋ BID ${myActiveTeamId} (${fmtCr(nextB)})`;
+          ? `⚡ SNATCH ${myActiveTeamId} (${fmtCr(nextB)}) • ${window._gmLastChanceSec}s`
+          : alreadyPassed
+            ? `⚡ RE-ENTER & BID ${myActiveTeamId} (${fmtCr(nextB)})`
+            : `✋ BID ${myActiveTeamId} (${fmtCr(nextB)})`;
     if (hp) { hp.disabled = state.curLeader === myActiveTeamId || alreadyPassed; hp.textContent = alreadyPassed ? '✓ PASSED' : '🤫 PASS / OUT'; }
     const myTObj = state.teams.find(x => x.id === myActiveTeamId);
     const j50 = document.getElementById('btnHumanJump50'), j100 = document.getElementById('btnHumanJump100'), hrtm = document.getElementById('btnHumanRtm');
@@ -115,7 +117,7 @@ function renderPodium(){
     <span class="tag">${roleLabel(p.role)}</span>
     <span class="tag ${p.os?'tag-os':'tag-ind'}">${p.os?'Overseas':'Indian'}</span>
     <span class="tag tag-ovr">OVR ${p.ovr}</span>
-    ${(() => { const pr = typeof getPlayerMarketProfile === 'function' ? getPlayerMarketProfile(p) : null; return pr ? `<span class="tag">Age ${pr.age}</span>${pr.isCaptain ? '<span class="tag" style="border-color:#facc15;color:#facc15">© Captain</span>' : ''}${pr.avail !== 'Full Season' ? '<span class="tag" style="border-color:#fb923c;color:#fb923c">⚠️ Intl Clash</span>' : ''}${pr.injRisk === 'High' ? '<span class="tag" style="border-color:#f43f5e;color:#f43f5e">🩹 Inj Risk</span>' : ''}` : ''; })()}
+    ${(() => { const pr = typeof getPlayerMarketProfile === 'function' ? getPlayerMarketProfile(p) : null; return pr ? `<span class="tag">Age ${pr.age}</span>${pr.isCaptain ? '<span class="tag" style="border-color:#facc15;color:#facc15">© Captain</span>' : ''}${(p.os && pr.avail !== 'Full Season') ? '<span class="tag" style="border-color:#fb923c;color:#fb923c">⚠️ Intl Clash</span>' : ''}${pr.injRisk === 'High' ? '<span class="tag" style="border-color:#f43f5e;color:#f43f5e">🩹 Inj Risk</span>' : ''}` : ''; })()}
     <span class="tag" style="border-color:#38bdf8;color:#38bdf8">${p.phase || roleLabel(p.role)} • ${p.batHand||'R'}HB${p.bowlStyle && p.bowlStyle!=='—' ? ' • '+p.bowlStyle : ''}</span>
     ${p.role==='BW'
       ? `<span class="tag">BOWL ${p.bowl||p.ovr} • ECON ${p.econ||'7.9'}</span>`
