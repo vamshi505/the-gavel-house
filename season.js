@@ -848,8 +848,10 @@ async function runOneSeasonMatch(useGeminiLine=true, tossInfo=null){
     return Math.max(115, ppRuns + midRuns + deathRuns);
   };
 
-  const capBonusA = teamAObj.captainId ? 3 : 0;
-  const capBonusB = teamBObj.captainId ? 3 : 0;
+  const capTrA = getCaptainTrait(state.players[teamAObj.captainId]);
+  const capTrB = getCaptainTrait(state.players[teamBObj.captainId]);
+  const capBonusA = capTrA ? (capTrA.key === 'PP' ? 5 : capTrA.key === 'SPIN' ? 4 : 3) : 0;
+  const capBonusB = capTrB ? (capTrB.key === 'CHASE' ? 6 : capTrB.key === 'DEATH' ? 5 : 3) : 0;
   const scoreA = calcPhaseScore(xiA, xiB, homeVenue, false) + capBonusA;
   const wktsA = Math.min(10, Math.floor(3 + Math.random() * 6));
 
@@ -1545,6 +1547,10 @@ function renderSeason(){
             <div class="award-card gold"><div class="award-title">👑 Player of the Tournament</div><div class="award-winner">${s.awards.mvp.name}</div><div class="award-stat">${s.awards.mvp.team} • ${s.awards.mvp.stat}</div></div>
             <div class="award-card"><div class="award-title">🧤 Best Catch of the Season</div><div class="award-winner">${s.bestCatch.player} (${s.bestCatch.team})</div><div class="award-stat">${s.bestCatch.desc}</div></div>
           </div>
+          <div class="btn-row" style="margin-top:10px">
+            <button class="btn btn-gold btn-sm" onclick="downloadSeasonPosterPNG()">🖼️ Download Champion &amp; Best XI Poster (PNG)</button>
+            <button class="btn btn-purple btn-sm" onclick="startNextSeasonMiniAuction()">🔄 Launch Season ${(state.seasonNumber||1)+1} Mini-Auction</button>
+          </div>
         </div>`;
     } else champWrap.innerHTML = '';
   }
@@ -2137,7 +2143,7 @@ function initLiveInnings(batTeam, bowlTeam, batXI, bowlXI, venue, target=null){
     runs: 0, wkts: 0, legalBalls: 0, extras: 0, target,
     strikerIdx: 0, nonStrikerIdx: 1, nextBatIdx: 2,
     curBowler: firstBowler, lastBowlerId: -1,
-    thisOver: [], partRuns: 0, partBalls: 0,
+    thisOver: [], overHistory: [], curOverRuns: 0, curOverWkts: 0, partRuns: 0, partBalls: 0,
     lastWktText: 'Opening Partnership', done: false
   };
 }
@@ -2321,8 +2327,15 @@ function lmStepSingleBall(silent=false){
       else if (prevR < 100 && striker.r >= 100) lmFlashEvent(`💯 CENTURY! ${striker.name} reaches ${striker.r} (${striker.b})!`, true);
     }
 
+    inn.curOverRuns = (inn.curOverRuns || 0) + runs;
+    if (isWkt) inn.curOverWkts = (inn.curOverWkts || 0) + 1;
+
     // End of Over handling
     if (inn.legalBalls % 6 === 0) {
+      if (!inn.overHistory) inn.overHistory = [];
+      inn.overHistory.push({ ov: Math.floor(inn.legalBalls / 6), runs: inn.curOverRuns || 0, wkts: inn.curOverWkts || 0 });
+      inn.curOverRuns = 0;
+      inn.curOverWkts = 0;
       bowler.ov += 1;
       bowler.balls = 0;
       [inn.strikerIdx, inn.nonStrikerIdx] = [inn.nonStrikerIdx, inn.strikerIdx];
@@ -2566,6 +2579,25 @@ function renderLiveMatchUI(){
   const wpFill = document.getElementById('lmWinProbBar');
   const wpTxt = document.getElementById('lmWinProbTxt');
   if (wpFill) wpFill.innerHTML = `<div style="width:${probBat}%;background:${inn.batColor}"></div><div style="width:${100-probBat}%;background:${inn.bowlColor}"></div>`;
+  const manEl = document.getElementById('lmManhattanWrap');
+  if (manEl) {
+    const hist = inn.overHistory || [];
+    if (!hist.length) {
+      manEl.innerHTML = `<div style="font-size:10px;color:var(--muted);text-align:center;padding:4px">📊 Manhattan Over-by-Over Graph appears after Over 1</div>`;
+    } else {
+      const maxR = Math.max(16, ...hist.map(h => h.runs));
+      manEl.innerHTML = `<div style="display:flex;align-items:flex-end;gap:3px;height:44px;padding:4px 2px 0">` +
+        hist.map(h => {
+          const hPct = Math.max(12, Math.round((h.runs / maxR) * 100));
+          const dots = h.wkts > 0 ? `<div style="width:6px;height:6px;border-radius:50%;background:#f43f5e;margin:0 auto 2px" title="${h.wkts} wkt(s)"></div>` : '';
+          return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%" title="Over ${h.ov}: ${h.runs} runs, ${h.wkts} wkt(s)">
+            ${dots}
+            <div style="width:100%;max-width:16px;height:${hPct}%;background:${inn.batColor};border-radius:2px 2px 0 0;opacity:0.9"></div>
+            <div style="font-size:8px;color:var(--muted);margin-top:1px">${h.ov}</div>
+          </div>`;
+        }).join('') + `</div>`;
+    }
+  }
   if (wpTxt) wpTxt.innerHTML = `<span style="color:${inn.batColor}">${inn.batTeamId} ${probBat}%</span><span style="color:var(--muted)">LIVE WIN PROBABILITY</span><span style="color:${inn.bowlColor}">${inn.bowlTeamId} ${100-probBat}%</span>`;
 
   // Highlight active tactical buttons
@@ -2715,4 +2747,168 @@ function commitLiveMatchToSeason(){
   renderSeason();
   renderSquads();
   saveState();
+}
+
+
+// ==================== V53: CAPTAINCY TRAITS, MULTI-SEASON MINI-AUCTION & CHAMPION POSTER ====================
+function getCaptainTrait(p){
+  if (!p) return null;
+  if (isSpinner(p) || p.role === 'AR') return { key:'SPIN', badge:'🌀 Spin Strategist', desc:'+4 middle-overs control & spin matchup boost' };
+  if (p.role === 'BW') return { key:'DEATH', badge:'🎯 Death-Over Calm', desc:'+5 death-overs bowling composure & yorker accuracy' };
+  if (p.role === 'WK' || KNOWN_FINISHERS.has(p.name)) return { key:'CHASE', badge:'🧊 Chase Master', desc:'+6 second-innings chase composure under pressure' };
+  return { key:'PP', badge:'🔥 Powerplay Aggressor', desc:'+5 powerplay batting intent & field aggression' };
+}
+
+function startNextSeasonMiniAuction(){
+  const s = state.seasonData;
+  if (!s || !s.finished) { showToast('Finish the current season first to launch the Mini-Auction!'); return; }
+  const nextSeason = (state.seasonNumber || 1) + 1;
+  if (!confirm(`Launch Season ${nextSeason} Mini-Auction? Every franchise will retain its top 5 core stars, release the rest to the auction pool, and update player OVRs based on Season ${nextSeason - 1} stats!`)) return;
+
+  // 1. Dynamic OVR progression based on last season stats
+  state.players.forEach(p => {
+    const st = s.pStats[p.id];
+    if (st && (st.runs > 0 || st.wkts > 0)) {
+      if (st.impact >= 420) p.ovr = Math.min(97, p.ovr + 2);
+      else if (st.impact >= 240) p.ovr = Math.min(96, p.ovr + 1);
+      else if (st.impact < 55 && p.ovr > 72) p.ovr = Math.max(66, p.ovr - 1);
+    }
+    if (p.status === 'INJURED') { p.injured = false; p.status = 'AVAIL'; }
+  });
+
+  // 2. Retain top 5 core stars per franchise (slabs: 18Cr, 14Cr, 11Cr, 8Cr, 5Cr = 56Cr; Purse left = 64Cr)
+  const retSlabs = [1800, 1400, 1100, 800, 500];
+  const fullPurse = state.startingPurse || 12000;
+  const retainedSet = new Set();
+
+  state.teams.forEach(t => {
+    const ranked = t.squad
+      .map(id => state.players[id])
+      .filter(Boolean)
+      .sort((a, b) => ((s.pStats[b.id]?.impact || 0) * 0.2 + b.ovr * 5) - ((s.pStats[a.id]?.impact || 0) * 0.2 + a.ovr * 5));
+    const keep = [];
+    let osKept = 0;
+    for (const p of ranked) {
+      if (keep.length >= 5) break;
+      if (p.os && osKept >= 2) continue;
+      keep.push(p);
+      if (p.os) osKept++;
+    }
+    let spent = 0;
+    t.squad = [];
+    keep.forEach((p, idx) => {
+      const cost = retSlabs[idx] || 500;
+      spent += cost;
+      p.status = 'SOLD'; p.soldTo = t.id; p.soldPrice = cost; p.retained = true;
+      t.squad.push(p.id);
+      retainedSet.add(p.id);
+    });
+    t.purse = Math.max(2000, fullPurse - spent);
+    t.customXI = null; t.customImpact = null;
+    t.rtmCards = 2;
+    t.chatter = `🔒 Retained ${keep.length} stars for Season ${nextSeason} Mini-Auction!`;
+  });
+
+  // 3. Release all non-retained players back to AVAIL pool
+  state.players.forEach(p => {
+    if (!retainedSet.has(p.id)) {
+      p.status = 'AVAIL'; p.soldTo = null; p.soldPrice = 0; p.retained = false;
+    }
+  });
+
+  state.seasonNumber = nextSeason;
+  state.seasonData = null;
+  state.curId = null; state.curLeader = null; state.curBid = 0; state.gavelStage = 0;
+  state.retentionsDone = true;
+  state.tradesUnlocked = true;
+  state.midSeasonLoanDone = false;
+  state.playerForm = {};
+  state.injuryHistory = [];
+  state.soldOrder = [];
+
+  sfxTrade();
+  pushTicker(`🔥 SEASON ${nextSeason} MINI-AUCTION LIVE! TOP 5 STARS RETAINED PER TEAM — PURSES RESET!`);
+  showToast(`🔥 Season ${nextSeason} Mini-Auction Ready! Head to STAGE to start bidding!`);
+  switchView('stage');
+  renderAll(); saveState();
+}
+
+function downloadSeasonPosterPNG(){
+  const s = state.seasonData;
+  if (!s || !s.finished || !s.awards) { showToast('Finish the season first to generate the Champion Poster!'); return; }
+  const champ = state.teams.find(x => x.id === s.champId) || state.teams[0];
+
+  // Build Official 11-Player Team of the Tournament (4 Bat, 1 WK, 2 AR, 4 Bowl by MVP impact)
+  const played = state.players.filter(p => p.status === 'SOLD' && (s.pStats[p.id]?.impact || 0) > 0)
+    .sort((a, b) => (s.pStats[b.id]?.impact || 0) - (s.pStats[a.id]?.impact || 0));
+  const bestXI = [];
+  const take = (role, n) => {
+    for (const p of played) {
+      if (bestXI.length >= 11) break;
+      if (p.role === role && !bestXI.includes(p)) { bestXI.push(p); if (--n <= 0) break; }
+    }
+  };
+  take('WK', 1); take('B', 4); take('AR', 2); take('BW', 4);
+  for (const p of played) { if (bestXI.length >= 11) break; if (!bestXI.includes(p)) bestXI.push(p); }
+
+  const W = 1080, H = 1350;
+  const cvs = document.createElement('canvas');
+  cvs.width = W; cvs.height = H;
+  const ctx = cvs.getContext('2d');
+
+  const bg = ctx.createLinearGradient(0, 0, 0, H);
+  bg.addColorStop(0, '#070d1c'); bg.addColorStop(1, '#04070f');
+  ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
+
+  ctx.strokeStyle = champ.color; ctx.lineWidth = 8;
+  ctx.strokeRect(26, 26, W - 52, H - 52);
+
+  ctx.fillStyle = '#facc15'; ctx.font = 'bold 26px monospace';
+  ctx.fillText(`IPL SEASON ${state.seasonNumber || 1} — GRAND CHAMPIONS`, 64, 90);
+  ctx.fillStyle = champ.color; ctx.font = 'italic bold 60px sans-serif';
+  ctx.fillText(champ.name.toUpperCase(), 64, 162);
+  ctx.fillStyle = '#cbd5e1'; ctx.font = '600 22px monospace';
+  ctx.fillText(`DEFEATED ${s.runnerId} IN THE GRAND FINAL`, 64, 202);
+
+  // Awards Strip
+  const aw = [
+    ['ORANGE CAP', s.awards.orange.name, s.awards.orange.stat, '#f97316'],
+    ['PURPLE CAP', s.awards.purple.name, s.awards.purple.stat, '#a855f7'],
+    ['MVP', s.awards.mvp.name, s.awards.mvp.stat.split(' (')[0], '#facc15']
+  ];
+  aw.forEach((a, i) => {
+    const x = 64 + i * 324;
+    ctx.fillStyle = 'rgba(15,23,42,0.92)'; ctx.fillRect(x, 228, 304, 110);
+    ctx.fillStyle = a[3]; ctx.fillRect(x, 228, 304, 6);
+    ctx.font = 'bold 16px monospace'; ctx.fillText(a[0], x + 16, 260);
+    ctx.fillStyle = '#ffffff'; ctx.font = 'bold 24px sans-serif'; ctx.fillText(a[1].slice(0, 18), x + 16, 294);
+    ctx.fillStyle = '#94a3b8'; ctx.font = '600 17px monospace'; ctx.fillText(a[2], x + 16, 324);
+  });
+
+  ctx.fillStyle = '#38bdf8'; ctx.font = 'bold 24px monospace';
+  ctx.fillText('TEAM OF THE TOURNAMENT (OFFICIAL BEST XI)', 64, 386);
+
+  let y = 408;
+  bestXI.forEach((p, i) => {
+    const st = s.pStats[p.id] || { runs:0, wkts:0, impact:0 };
+    ctx.fillStyle = i % 2 === 0 ? 'rgba(30,41,59,0.7)' : 'rgba(15,23,42,0.7)';
+    ctx.fillRect(64, y, W - 128, 72);
+    ctx.fillStyle = '#facc15'; ctx.font = 'bold 24px monospace';
+    ctx.fillText(String(i + 1).padStart(2, '0'), 84, y + 45);
+    ctx.fillStyle = '#ffffff'; ctx.font = 'bold 26px sans-serif';
+    ctx.fillText(`${p.name} (${p.soldTo})`, 140, y + 45);
+    ctx.fillStyle = '#34d399'; ctx.font = 'bold 20px monospace';
+    ctx.fillText(`${st.runs}R • ${st.wkts}W • ${Math.round(st.impact)} pts`, W - 360, y + 45);
+    y += 78;
+  });
+
+  ctx.fillStyle = '#64748b'; ctx.font = '600 18px monospace';
+  ctx.fillText('THE GAVEL HOUSE — IPL MEGA AUCTION & SEASON SIMULATOR', 64, H - 46);
+
+  const a = document.createElement('a');
+  a.href = cvs.toDataURL('image/png');
+  a.download = `IPL_Season_${state.seasonNumber || 1}_Champion_BestXI.png`;
+  a.click();
+  sfxTrade();
+  showToast('🖼️ Downloaded Champion & Team of the Tournament Poster!');
 }

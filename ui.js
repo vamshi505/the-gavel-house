@@ -315,6 +315,7 @@ function renderSquads(){
               <button class="btn btn-sm btn-gold" style="padding:4px 8px;font-size:10.5px" onclick="openXIEditor('${t.id}')">✏️ Edit Manually</button>
             </div>
           </div>
+          ${(() => { const capObj = state.players[t.captainId]; const tr = (capObj && typeof getCaptainTrait === 'function') ? getCaptainTrait(capObj) : null; return tr ? `<div style="font-size:10.5px;color:#38bdf8;margin-bottom:5px;font-family:'IBM Plex Mono',monospace"><b>© ${capObj.name} — ${tr.badge}:</b> ${tr.desc}</div>` : ''; })()}
           ${t.xiNote ? `<div style="font-size:11.5px;color:var(--text);opacity:0.85;margin-bottom:7px;font-style:italic">🧠 ${t.xiNote}</div>` : ''}
           <div style="display:flex;flex-wrap:wrap;gap:5px">
             ${xi.map((p,i)=>`<span class="tag">${i+1}. ${p.name}${t.captainId===p.id?' ©':t.vcId===p.id?' (VC)':''}${getFormBadge(p.id)} <span style="opacity:0.65">(${p.role})</span>${p.os?' ✈️':''}</span>`).join('')}
@@ -814,26 +815,33 @@ function renderCompareBody(){
 function openMatrixDrawer(){
   const rows = state.teams.map(t => {
     const c = teamRoleCounts(t);
-    const owner = t.isHuman ? (t.ownerName || 'Human') : 'AI Bot';
+    const ev = teamCoachEval(t);
+    const deptSpend = { B:0, WK:0, AR:0, BW:0 };
+    t.squad.forEach(id => { const pl = state.players[id]; if (pl && deptSpend[pl.role] !== undefined) deptSpend[pl.role] += (pl.soldPrice || 0); });
+    const needTag = c.WK === 0 ? '<span style="color:#f43f5e">⚠️WK</span>'
+      : c.BW < 4 ? '<span style="color:#fb923c">⚠️Bowl</span>'
+      : c.spinners === 0 ? '<span style="color:#38bdf8">⚠️Spin</span>'
+      : c.B < 4 ? '<span style="color:#facc15">⚠️Bat</span>'
+      : '<span style="color:#34d399">✓Bal</span>';
     return `
       <tr>
-        <td>${getTeamLogo(t.id, 16)} <b style="color:${t.color}">${t.id}</b> <small style="color:var(--muted)">(${owner})</small></td>
+        <td>${getTeamLogo(t.id, 16)} <b style="color:${t.color}">${t.id}</b></td>
         <td style="font-family:'JetBrains Mono',monospace;color:var(--gold)"><b>${fmtCr(t.purse)}</b></td>
         <td><b>${t.squad.length}</b>/25</td>
-        <td>${c.OS}/8</td>
-        <td>${c.B}</td>
+        <td><b style="color:#34d399">${ev.overall}</b>/10</td>
+        <td>${needTag}</td>
+        <td>${c.B} <small style="color:var(--muted)">(${(deptSpend.B/100).toFixed(0)}Cr)</small></td>
         <td>${c.WK}</td>
-        <td>${c.AR}</td>
-        <td>${c.BW}</td>
-        <td>${c.spinners}</td>
-        <td>${t.rtmCards ?? 2}</td>
+        <td>${c.AR} <small style="color:var(--muted)">(${(deptSpend.AR/100).toFixed(0)}Cr)</small></td>
+        <td>${c.BW} <small style="color:var(--muted)">(${(deptSpend.BW/100).toFixed(0)}Cr)</small></td>
+        <td>${c.OS}/8</td>
       </tr>`;
   }).join('');
 
   document.getElementById('matrixTableWrap').innerHTML = `
     <table>
       <thead>
-        <tr><th>Team</th><th>Purse</th><th>Sq</th><th>OS</th><th>Bat</th><th>WK</th><th>AR</th><th>Bowl</th><th>Spin</th><th>RTM</th></tr>
+        <tr><th>Team</th><th>Purse</th><th>Sq</th><th>XI Rtg</th><th>Need</th><th>Bat</th><th>WK</th><th>AR</th><th>Bowl</th><th>OS</th></tr>
       </thead>
       <tbody>${rows}</tbody>
     </table>`;

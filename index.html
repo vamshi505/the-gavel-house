@@ -12,7 +12,7 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:ital,wght@0,600;0,700;1,700&family=IBM+Plex+Mono:wght@500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=52" />
+<link rel="stylesheet" href="styles.css?v=53" />
 </head>
 <body class="theme-hud">
 <canvas id="confettiCanvas" style="position:fixed;inset:0;pointer-events:none;z-index:85"></canvas>
@@ -34,7 +34,7 @@
       <div class="brand">
         <div class="crest">IPL</div>
         <div class="brand-text">
-          <h1>The Gavel House <span style="font-size:10px;color:#38bdf8;font-style:normal;vertical-align:middle">v52</span></h1>
+          <h1>The Gavel House <span style="font-size:10px;color:#38bdf8;font-style:normal;vertical-align:middle">v53</span></h1>
           <p id="hdrSub">520 Players • ₹120 Cr • ₹25 Cr Cap</p>
         </div>
       </div>
@@ -673,7 +673,10 @@
           <button class="btn btn-blue btn-sm" style="width:100%;border-color:#38bdf8" onclick="openIntlCareerHub()">🌍 International Career Mode (Top 10 ICC T20I Nations — Win IPL as GM to Unlock!)</button>
         </div>
         <div id="replaySeasonWrap" style="display:none;margin-top:7px">
-          <button class="btn btn-purple btn-sm" style="width:100%" onclick="replayNewSeason()">🔄 Start New Season With Same 10 Squads</button>
+          <div class="btn-row" style="margin-top:0">
+            <button class="btn btn-gold btn-sm" onclick="startNextSeasonMiniAuction()">🔥 Next Season Mini-Auction</button>
+            <button class="btn btn-purple btn-sm" onclick="replayNewSeason()">🔄 Replay Same Squads</button>
+          </div>
         </div>
         <div id="latestMatchBanner" style="margin-top:10px"></div>
       </div>
@@ -1221,10 +1224,11 @@
       </div>
     </div>
 
-    <!-- Live Win Probability Bar -->
+    <!-- Live Win Probability Bar & Manhattan Over-by-Over Graph -->
     <div style="margin:2px 0">
       <div id="lmWinProbTxt" style="display:flex;justify-content:space-between;font-family:'IBM Plex Mono',monospace;font-size:10px;font-weight:700"></div>
       <div class="win-prob-bar" id="lmWinProbBar" style="height:7px;margin:3px 0 0"></div>
+      <div id="lmManhattanWrap" style="margin-top:5px;background:var(--input-bg);border:1px solid var(--card-border);border-radius:4px;padding:3px 6px"></div>
     </div>
 
     <!-- Cricket Coach / Manager Live Tactical Desk -->
@@ -1391,13 +1395,13 @@
 <div class="toast" id="toast"></div>
 
 
-<script src="players.js?v=52"></script>
-<script src="state.js?v=52"></script>
-<script src="offline-engine.js?v=52"></script>
-<script src="ai-engine.js?v=52"></script>
-<script src="multiplayer.js?v=52"></script>
-<script src="season.js?v=52"></script>
-<script src="international.js?v=52"></script>
-<script src="ui.js?v=52"></script>
+<script src="players.js?v=53"></script>
+<script src="state.js?v=53"></script>
+<script src="offline-engine.js?v=53"></script>
+<script src="ai-engine.js?v=53"></script>
+<script src="multiplayer.js?v=53"></script>
+<script src="season.js?v=53"></script>
+<script src="international.js?v=53"></script>
+<script src="ui.js?v=53"></script>
 </body>
 </html>
