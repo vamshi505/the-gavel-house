@@ -81,6 +81,11 @@ function teamRaisePaddle(tid){
   state.bidHistory.push({ bid: state.curBid, leader: state.curLeader, gavel: state.gavelStage });
   if (state.bidHistory.length > 20) state.bidHistory.shift();
 
+  if (state.passedTeams && state.passedTeams.includes(t.id)) {
+    state.passedTeams = state.passedTeams.filter(id => id !== t.id);
+    window._gmLastChanceSec = 0;
+    addReaction(`⚡ <b style="color:${t.color}">${t.id} RE-ENTERED THE BIDDING!</b> Changed their mind at the final bell for ${p.name} at <b>${fmtCr(reqBid)}</b>!`, t.color);
+  }
   state.curBid = reqBid;
   state.curLeader = t.id;
   state.gavelStage = 0;

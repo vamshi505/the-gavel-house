@@ -2987,6 +2987,33 @@ async function startAIAuctioneerLoop(){
       continue;
     }
     if (state.gavelStage >= 2) {
+      // 3-SECOND LAST-CHANCE RE-ENTRY WINDOW if Human GM passed earlier & can still afford the next bid!
+      const nextReenterBid = Math.min(MAX_BID_CAP, state.curBid + nextInc(state.curBid));
+      const canReenter = myTeam && (state.passedTeams || []).includes(myId) && state.curLeader !== myId &&
+        state.curBid < MAX_BID_CAP && myTeam.squad.length < 25 &&
+        (!p.os || teamRoleCounts(myTeam).OS < 8) && maxSpendable(myTeam) >= nextReenterBid;
+      if (canReenter) {
+        let reentered = false;
+        for (let sec = 3; sec >= 1; sec--) {
+          window._gmLastChanceSec = sec;
+          setAIAuctioneerStatus(`⏳ <b>LAST CHANCE (${sec}s)!</b> Changed your mind on <b>${p.name}</b>? Tap <b>⚡ RE-ENTER &amp; BID (${fmtCr(nextReenterBid)})</b> before SOLD!`);
+          renderPodium();
+          beep(720 + (4 - sec) * 110, 0.07, 'sine', 0.09);
+          for (let tick = 0; tick < 10; tick++) {
+            if (state.curLeader === myId || !(state.passedTeams || []).includes(myId)) { reentered = true; break; }
+            if (!(await waitAuctioneerMs(100, token))) break;
+          }
+          if (reentered || token !== aiAuctLoopToken || aiAuctPaused) break;
+        }
+        window._gmLastChanceSec = 0;
+        renderPodium();
+        if (token !== aiAuctLoopToken || aiAuctPaused) break;
+        if (reentered) {
+          setAIAuctioneerStatus(`⚡ <b>${myId}</b> re-entered the war at <b>${fmtCr(state.curBid)}</b>! Polling rival tables...`);
+          if (!(await waitAuctioneerMs(voiceOn && !acceleratorMode ? 750 : 280, token))) break;
+          continue;
+        }
+      }
       setAIAuctioneerStatus(`🔨 SOLD! <b>${p.name}</b> goes to <b>${state.curLeader}</b> for <b>${fmtCr(state.curBid)}</b>!`);
       hammerSold();
       // ALWAYS wait for the full SOLD announcement (player + team + price) so the team name is never cut off!

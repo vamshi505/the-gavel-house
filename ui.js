@@ -47,8 +47,15 @@ function renderPodium(){
     const hb = document.getElementById('btnHumanBid');
     const hp = document.getElementById('btnHumanPass');
     const alreadyPassed = (state.passedTeams || []).includes(myActiveTeamId);
-    hb.disabled = atCap || state.curLeader === myActiveTeamId || alreadyPassed;
-    hb.textContent = atCap ? `🔒 ₹25.00 Cr CAP HIT` : state.curLeader === myActiveTeamId ? `👑 YOU LEAD (${fmtCr(state.curBid)})` : `✋ BID ${myActiveTeamId} (${fmtCr(nextB)})`;
+    const inLastChance = Boolean(window._gmLastChanceSec && window._gmLastChanceSec > 0 && alreadyPassed && !atCap && state.curLeader !== myActiveTeamId);
+    hb.disabled = atCap || state.curLeader === myActiveTeamId || (alreadyPassed && !inLastChance);
+    hb.textContent = atCap
+      ? `🔒 ₹25.00 Cr CAP HIT`
+      : state.curLeader === myActiveTeamId
+        ? `👑 YOU LEAD (${fmtCr(state.curBid)})`
+        : inLastChance
+          ? `⚡ RE-ENTER & BID ${myActiveTeamId} (${fmtCr(nextB)}) • ${window._gmLastChanceSec}s`
+          : `✋ BID ${myActiveTeamId} (${fmtCr(nextB)})`;
     if (hp) { hp.disabled = state.curLeader === myActiveTeamId || alreadyPassed; hp.textContent = alreadyPassed ? '✓ PASSED' : '🤫 PASS / OUT'; }
     const myTObj = state.teams.find(x => x.id === myActiveTeamId);
     const j50 = document.getElementById('btnHumanJump50'), j100 = document.getElementById('btnHumanJump100'), hrtm = document.getElementById('btnHumanRtm');

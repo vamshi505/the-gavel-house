@@ -45,7 +45,17 @@ exports.handler = async (event) => {
     return { statusCode: 429, headers, body: JSON.stringify({ error: 'Rate limit reached (30/10m). Try again shortly or add your own free key in Settings.' }) };
   }
 
-  const keys = [process.env.GEMINI_API_KEY, process.env.GEMINI_API_KEY_2].filter(Boolean);
+  const allKeys = [
+    process.env.GEMINI_API_KEY,
+    process.env.GEMINI_API_KEY_2,
+    process.env.GEMINI_API_KEY_3,
+    process.env.GEMINI_API_KEY_4,
+    process.env.GEMINI_API_KEY_5,
+    process.env.GEMINI_API_KEY_6
+  ].filter(Boolean);
+  // Round-robin rotation so load spreads evenly across all configured keys
+  const startIdx = Math.floor(Math.random() * Math.max(1, allKeys.length));
+  const keys = allKeys.length ? [...allKeys.slice(startIdx), ...allKeys.slice(0, startIdx)] : [];
   if (!keys.length) {
     return { statusCode: 503, headers, body: JSON.stringify({ error: 'Server GEMINI_API_KEY not configured on Netlify yet.' }) };
   }
