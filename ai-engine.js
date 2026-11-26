@@ -99,41 +99,79 @@ function evaluatePlayerForTeam(team, p, stretch=1.0){
   const avgPerSlot = team.purse / slotsLeft;
 
   const avgPurse = state.teams.reduce((s,x)=>s+x.purse, 0) / 10;
-  const purseFactor = Math.max(0.78, Math.min(1.26, team.purse / Math.max(1500, avgPurse)));
+  const purseFactor = Math.max(0.76, Math.min(1.16, team.purse / Math.max(1500, avgPurse)));
 
-  let val = p.tier==='S' ? p.fairVal * 0.94 : p.tier==='A' ? p.fairVal * 0.94 : p.fairVal * 0.92;
-  if (!p.os && (p.tier === 'S' || p.tier === 'A')) val *= 1.08;
-  if (p.role === 'AR' && !p.os && p.ovr >= 82) val *= 1.06;
+  // V55: MULTI-FACTOR REAL-WORLD VALUATION (Age, Availability, Captaincy Need, Recent Form, Injury Risk & Live AI Market Intel)
+  const prof = (typeof getPlayerMarketProfile === 'function') ? getPlayerMarketProfile(p) : { age:27, isCaptain:false, avail:'Full Season', injRisk:'Low', formTag:'Steady' };
+  const aiScout = (state.scoutCache && state.scoutCache[p.id]) ? state.scoutCache[p.id] : null;
+  const effAge = (aiScout && typeof aiScout.age === 'number') ? aiScout.age : prof.age;
+  const effCap = (aiScout && typeof aiScout.isCaptain === 'boolean') ? aiScout.isCaptain : prof.isCaptain;
+  const effAvail = (aiScout && aiScout.availability) ? String(aiScout.availability) : prof.avail;
+  const effInj = (aiScout && aiScout.injuryRisk) ? String(aiScout.injuryRisk) : prof.injRisk;
+  const effForm = (aiScout && aiScout.recentForm) ? String(aiScout.recentForm) : prof.formTag;
 
-  let mult = (0.76 + needRatio * 0.28) * purseFactor * balanceBoost;
-  if (team.pref && team.pref.includes(p.role)) mult *= 1.05;
+  // 1) Age Curve Multiplier (Prime 22-29 pays full/premium; 35+ veterans get realistic age discount for mega auction!)
+  let ageMult = 1.0;
+  if (effAge <= 26) ageMult = 1.06;
+  else if (effAge <= 31) ageMult = 1.00;
+  else if (effAge <= 34) ageMult = 0.90;
+  else if (effAge <= 36) ageMult = 0.78;
+  else ageMult = 0.68;
+
+  // 2) Captaincy Need Multiplier (Teams WITHOUT a proven captain pay +12% for a skipper; teams WITH one don't overpay!)
+  const teamHasCaptain = team.squad.some(id => state.players[id] && typeof PROVEN_CAPTAINS !== 'undefined' && PROVEN_CAPTAINS.has(state.players[id].name));
+  let capMult = 1.0;
+  if (effCap && !teamHasCaptain) capMult = 1.13;
+  else if (effCap && teamHasCaptain) capMult = 0.92;
+
+  // 3) Availability & Injury Risk Multipliers
+  let availMult = /partial|clash|doubt|limited|miss/i.test(effAvail) ? 0.84 : 1.0;
+  let injMult = /high/i.test(effInj) ? 0.83 : /med/i.test(effInj) ? 0.93 : 1.0;
+
+  // 4) Recent Form Multiplier
+  let formMult = /red hot|hot|elite|peak/i.test(effForm) ? 1.07 : /cold|poor|dip|slump/i.test(effForm) ? 0.84 : 1.0;
+
+  // Base fair value calibrated so Tier S lands ~₹13-21 Cr (only rare prime captains/unicorns hit ₹22-25 Cr!)
+  let val = p.tier==='S' ? p.fairVal * 0.78 : p.tier==='A' ? p.fairVal * 0.76 : p.fairVal * 0.80;
+  if (aiScout && typeof aiScout.realisticMaxCr === 'number' && aiScout.realisticMaxCr >= 1 && aiScout.realisticMaxCr <= 25) {
+    // Blend live AI's real-world market valuation (60% AI + 40% model)
+    val = (aiScout.realisticMaxCr * 100 * 0.60) + (val * 0.40);
+  }
+  if (!p.os && (p.tier === 'S' || p.tier === 'A')) val *= 1.06;
+  if (p.role === 'AR' && !p.os && p.ovr >= 82) val *= 1.05;
+
+  let mult = (0.72 + needRatio * 0.24) * purseFactor * Math.min(1.18, balanceBoost) * ageMult * capMult * availMult * injMult * formMult;
+  if (team.pref && team.pref.includes(p.role)) mult *= 1.04;
 
   if (team.id === 'RR' || team.id === 'GT' || team.id === 'CSK') {
-    if (megaBuys >= 1) mult *= 0.85;
+    if (megaBuys >= 1) mult *= 0.84;
   } else if (team.id === 'PBKS' || team.id === 'RCB') {
-    if (superBuys === 0 && p.tier === 'S') mult *= 1.07;
-    else if (megaBuys >= 2) mult *= 0.80;
+    if (superBuys === 0 && p.tier === 'S') mult *= 1.05;
+    else if (megaBuys >= 2) mult *= 0.78;
   } else {
-    if (megaBuys >= 2) mult *= 0.78;
-    else if (megaBuys === 1) mult *= 0.88;
+    if (megaBuys >= 2) mult *= 0.76;
+    else if (megaBuys === 1) mult *= 0.86;
   }
 
-  const hash = ((team.id.charCodeAt(0) * 41 + team.id.charCodeAt(1) * 19 + p.id * 23 + (state.seed || 17)) % 25) - 12;
+  const hash = ((team.id.charCodeAt(0) * 41 + team.id.charCodeAt(1) * 19 + p.id * 23 + (state.seed || 17)) % 21) - 10;
   mult *= (1 + hash / 100) * stretch;
 
   const rawSpendable = Math.max(0, team.purse - Math.max(0, 18 - (team.squad.length + 1)) * 30);
+  // Realistic hard tier caps so teams don't spam ₹25 Cr on every Marquee player
   let hardTierCap = p.tier==='S'
-    ? (superBuys === 0 ? Math.min(MAX_BID_CAP, rawSpendable * 0.25) : Math.min(1750, rawSpendable * 0.20))
+    ? (superBuys === 0 ? Math.min(MAX_BID_CAP, rawSpendable * 0.21) : Math.min(1550, rawSpendable * 0.16))
     : p.tier==='A'
-      ? (megaBuys < 2 ? Math.min(1700, rawSpendable * 0.20) : Math.min(1250, rawSpendable * 0.16))
+      ? (megaBuys < 2 ? Math.min(1450, rawSpendable * 0.16) : Math.min(1050, rawSpendable * 0.13))
       : p.tier==='B'
-        ? Math.min(1050, rawSpendable * 0.15)
-        : Math.min(500, rawSpendable * 0.10);
+        ? Math.min(900, rawSpendable * 0.12)
+        : Math.min(450, rawSpendable * 0.08);
 
-  if (megaBuys >= 1) hardTierCap = Math.min(hardTierCap, avgPerSlot * 3.4);
+  if (effAge >= 36) hardTierCap = Math.min(hardTierCap, 1550);
+  if (/high/i.test(effInj) || /partial|clash/i.test(effAvail)) hardTierCap = Math.min(hardTierCap, 1650);
+  if (megaBuys >= 1) hardTierCap = Math.min(hardTierCap, avgPerSlot * 3.1);
   hardTierCap = Math.min(MAX_BID_CAP, hardTierCap * stretch);
 
-  const commitBoost = (commitment === 'BID') ? 225 : 0;
+  const commitBoost = (commitment === 'BID') ? 175 : 0;
   const scoutFitBonus = (state.scoutSuitability && state.scoutSuitability[p.id] && state.scoutSuitability[p.id][team.id]) ? state.scoutSuitability[p.id][team.id] : 0;
   const boost = ((state.curId === p.id && state.persuasionBoost && state.persuasionBoost[team.id]) ? state.persuasionBoost[team.id] : 0) + commitBoost + scoutFitBonus;
   let finalVal = Math.min(MAX_BID_CAP, cap, Math.max(p.base, Math.min(val * mult + boost, Math.max(p.base, hardTierCap + boost))));
@@ -2428,6 +2466,12 @@ ${teamConditions}
 
 Return ONLY valid JSON:
 {
+  "age": 27,
+  "isCaptain": false,
+  "availability": "Full Season" or "Partial / Int'l Clash",
+  "injuryRisk": "Low" or "Med" or "High",
+  "recentForm": "Red Hot" or "Steady" or "Cold",
+  "realisticMaxCr": 14.5,
   "stats": ["e.g. IPL SR: 148.2 / Avg: 32.4", "e.g. Phase: Powerplay & Death", "e.g. Key Skill: Left-arm swing / Spin basher"],
   "bestFits": [
     {"teamId": "CSK", "reason": "1 crisp sentence why ${p.name} thrives at their home ground & under their coach"},
@@ -2477,7 +2521,21 @@ function renderScoutDossier(p, rep, loadingAI=false){
     lbl.textContent = '🔍 SMART SCOUTING & PITCH FIT ENGINE';
   }
 
-  statsRow.innerHTML = (rep.stats || []).slice(0, 3).map(s => `<span class="scout-stat-pill">${s}</span>`).join('');
+  const prof = (typeof getPlayerMarketProfile === 'function') ? getPlayerMarketProfile(p) : { age:27, isCaptain:false, avail:'Full Season', injRisk:'Low', formTag:'Steady' };
+  const sAge = (typeof rep.age === 'number') ? rep.age : prof.age;
+  const sCap = (typeof rep.isCaptain === 'boolean') ? rep.isCaptain : prof.isCaptain;
+  const sAvail = rep.availability || prof.avail;
+  const sInj = rep.injuryRisk || prof.injRisk;
+  const sForm = rep.recentForm || prof.formTag;
+  const metaPills = [
+    `🎂 Age ${sAge}`,
+    sCap ? '© Captain Option' : null,
+    `📅 ${sAvail}`,
+    `📈 Form: ${sForm}`,
+    sInj !== 'Low' ? `⚠️ Inj Risk: ${sInj}` : null,
+    (typeof rep.realisticMaxCr === 'number') ? `💰 Est Cap: ₹${rep.realisticMaxCr} Cr` : null
+  ].filter(Boolean);
+  statsRow.innerHTML = [...metaPills, ...(rep.stats || []).slice(0, 3)].map(s => `<span class="scout-stat-pill">${s}</span>`).join('');
   fitsList.innerHTML = (rep.bestFits || []).slice(0, 3).map((bf, i) => {
     const t = state.teams.find(x => x.id === bf.teamId);
     const col = t ? t.color : 'var(--gold)';

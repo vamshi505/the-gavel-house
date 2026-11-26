@@ -115,6 +115,7 @@ function renderPodium(){
     <span class="tag">${roleLabel(p.role)}</span>
     <span class="tag ${p.os?'tag-os':'tag-ind'}">${p.os?'Overseas':'Indian'}</span>
     <span class="tag tag-ovr">OVR ${p.ovr}</span>
+    ${(() => { const pr = typeof getPlayerMarketProfile === 'function' ? getPlayerMarketProfile(p) : null; return pr ? `<span class="tag">Age ${pr.age}</span>${pr.isCaptain ? '<span class="tag" style="border-color:#facc15;color:#facc15">© Captain</span>' : ''}${pr.avail !== 'Full Season' ? '<span class="tag" style="border-color:#fb923c;color:#fb923c">⚠️ Int'l Clash</span>' : ''}${pr.injRisk === 'High' ? '<span class="tag" style="border-color:#f43f5e;color:#f43f5e">🩹 Inj Risk</span>' : ''}` : ''; })()}
     <span class="tag" style="border-color:#38bdf8;color:#38bdf8">${p.phase || roleLabel(p.role)} • ${p.batHand||'R'}HB${p.bowlStyle && p.bowlStyle!=='—' ? ' • '+p.bowlStyle : ''}</span>
     ${p.role==='BW'
       ? `<span class="tag">BOWL ${p.bowl||p.ovr} • ECON ${p.econ||'7.9'}</span>`

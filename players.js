@@ -1019,3 +1019,52 @@ function getPlayerCartoonAvatar(p, size=40){
 
 
 
+
+
+// ==================== V55: REALISTIC PLAYER VALUATION FACTORS (AGE, CAPTAINCY, AVAILABILITY, FORM, INJURY RISK) ====================
+const PROVEN_CAPTAINS = new Set([
+  'Shreyas Iyer','Rishabh Pant','Hardik Pandya','KL Rahul','Sanju Samson','Shubman Gill',
+  'Ruturaj Gaikwad','Suryakumar Yadav','Pat Cummins','Rohit Sharma','Virat Kohli',
+  'Aiden Markram','Mitchell Marsh','Nicholas Pooran','Rashid Khan','Axar Patel','Ravindra Jadeja',
+  'Jos Buttler','Mitchell Santner','Sam Curran','David Miller','Shai Hope','Dasun Shanaka'
+]);
+
+const INJURY_PRONE_PLAYERS = new Set([
+  'Jofra Archer','Mayank Yadav','Deepak Chahar','Anrich Nortje','Lockie Ferguson',
+  'Mark Wood','Gerald Coetzee','Mohsin Khan','Prasidh Krishna','T. Natarajan',
+  'Spencer Johnson','Mitchell Marsh','Cameron Green','Hardik Pandya','Wanindu Hasaranga'
+]);
+
+const PARTIAL_AVAIL_RISK = new Set([
+  'Josh Hazlewood','Pat Cummins','Mitchell Starc','Jos Buttler','Phil Salt','Will Jacks',
+  'Liam Livingstone','Sam Curran','Jofra Archer','Ben Duckett','Jacob Bethell','Jamie Smith',
+  'Gus Atkinson','Brydon Carse','Jamie Overton','Kagiso Rabada','Marco Jansen','Aiden Markram'
+]);
+
+// Known ages (as of Nov 2026) for marquee & top stars; others get deterministic realistic ages
+const KNOWN_AGES = {
+  'Virat Kohli':38,'Rohit Sharma':39,'Ravindra Jadeja':37,'Bhuvneshwar Kumar':36,'Mohammad Shami':36,
+  'Sunil Narine':38,'Jos Buttler':36,'Trent Boult':37,'Mitchell Starc':36,'David Miller':37,
+  'Suryakumar Yadav':36,'Yuzvendra Chahal':36,'KL Rahul':34,'Hardik Pandya':33,'Jasprit Bumrah':32,
+  'Pat Cummins':33,'Travis Head':32,'Heinrich Klaasen':35,'Marcus Stoinis':37,'Mitchell Marsh':35,
+  'Josh Hazlewood':35,'Kagiso Rabada':31,'Sanju Samson':32,'Shreyas Iyer':31,'Axar Patel':32,
+  'Kuldeep Yadav':31,'Varun Chakravarthy':35,'Mohammad Siraj':32,'Aiden Markram':32,'Nicholas Pooran':31,
+  'Rishabh Pant':29,'Ishan Kishan':28,'Ruturaj Gaikwad':29,'Shubman Gill':27,'Arshdeep Singh':27,
+  'Rinku Singh':29,'Shivam Dube':33,'Tim David':30,'Shimron Hetmyer':29,'Sam Curran':28,'Will Jacks':28,
+  'Rashid Khan':28,'Phil Salt':30,'Lockie Ferguson':35,'Marco Jansen':26,'Yashasvi Jaiswal':24,
+  'Abhishek Sharma':26,'Tilak Varma':24,'Noor Ahmad':21,'Sai Sudharsan':25,'Tristan Stubbs':26,
+  'Dhruv Jurel':25,'Riyan Parag':25,'Mayank Yadav':24,'Nitish Kumar Reddy':23,'Harshit Rana':24,
+  'Dewald Brevis':23,'Jacob Bethell':23,'Vaibhav Suryavanshi':15,'Angkrish Raghuvanshi':21,
+  'Matheesha Pathirana':23,'Cameron Green':27,'Rachin Ravindra':27,'Jake Fraser-McGurk':24
+};
+
+function getPlayerMarketProfile(p){
+  if (!p) return { age:26, isCaptain:false, avail:'Full Season', injRisk:'Low', formTag:'Steady' };
+  const h = p.name.split('').reduce((a,c)=>a+c.charCodeAt(0), 0);
+  const age = p.age || KNOWN_AGES[p.name] || (p.set === 'Set 4' || (p.set && p.set.startsWith('U')) ? (19 + (h % 7)) : (24 + (h % 9)));
+  const isCaptain = PROVEN_CAPTAINS.has(p.name);
+  const injRisk = INJURY_PRONE_PLAYERS.has(p.name) ? 'High' : (p.role === 'BW' && !isSpinner(p) && age >= 32) ? 'Med' : 'Low';
+  const avail = PARTIAL_AVAIL_RISK.has(p.name) ? 'Int\'l Clash Risk' : 'Full Season';
+  const formTag = (p.ovr >= 91 && age <= 31) ? 'Red Hot' : (age >= 36 ? 'Veteran' : (h % 5 === 0 ? 'Hot' : h % 7 === 0 ? 'Mixed' : 'Steady'));
+  return { age, isCaptain, avail, injRisk, formTag };
+}
