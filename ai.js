@@ -1,7 +1,7 @@
-// Netlify Serverless Function: /.netlify/functions/ai
+// Vercel Serverless Function: /api/ai
 // Multi-Provider Free AI Failover Chain:
 // Gemini (up to 6 keys) -> Groq -> Cerebras -> OpenRouter -> Mistral
-// Configure any combination of these in Netlify Site Environment Variables:
+// Add any combination of these in Vercel Project Settings -> Environment Variables:
 // GEMINI_API_KEY (.._6), GROQ_API_KEY, CEREBRAS_API_KEY, OPENROUTER_API_KEY, MISTRAL_API_KEY
 
 const RATE_WINDOW_MS = 10 * 60 * 1000;
@@ -61,31 +61,24 @@ async function callOpenAICompatible(url, apiKey, model, prompt, temperature, ext
   return extractJSON(rawText);
 }
 
-exports.handler = async (event) => {
-  const headers = {
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Headers': 'Content-Type',
-    'Access-Control-Allow-Methods': 'POST, OPTIONS',
-    'Content-Type': 'application/json'
-  };
+module.exports = async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
 
-  if (event.httpMethod === 'OPTIONS') return { statusCode: 204, headers, body: '' };
-  if (event.httpMethod !== 'POST') return { statusCode: 405, headers, body: JSON.stringify({ error: 'Method Not Allowed' }) };
+  if (req.method === 'OPTIONS') return res.status(204).end();
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Method Not Allowed' });
 
-  const clientIp = (event.headers['x-nf-client-connection-ip'] || event.headers['x-forwarded-for'] || 'anon').split(',')[0].trim();
+  const clientIp = (req.headers['x-forwarded-for'] || req.headers['x-real-ip'] || 'anon').split(',')[0].trim();
   if (isRateLimited(clientIp)) {
-    return { statusCode: 429, headers, body: JSON.stringify({ error: 'Rate limit reached. Smart Offline Engine active.' }) };
+    return res.status(429).json({ error: 'Rate limit reached. Smart Offline Engine active.' });
   }
 
-  let body;
-  try { body = JSON.parse(event.body || '{}'); } catch (e) {
-    return { statusCode: 400, headers, body: JSON.stringify({ error: 'Invalid JSON body' }) };
-  }
-
+  const body = (typeof req.body === 'string') ? JSON.parse(req.body || '{}') : (req.body || {});
   const prompt = String(body.prompt || '').slice(0, 14000);
   const temperature = typeof body.temperature === 'number' ? body.temperature : 0.75;
   const grounded = Boolean(body.grounded);
-  if (!prompt) return { statusCode: 400, headers, body: JSON.stringify({ error: 'Missing prompt' }) };
+  if (!prompt) return res.status(400).json({ error: 'Missing prompt' });
 
   // 1. GEMINI (Up to 6 keys, round-robin)
   const allGemini = [
@@ -103,16 +96,16 @@ exports.handler = async (event) => {
           generationConfig: grounded ? { temperature } : { responseMimeType: 'application/json', temperature }
         };
         if (grounded) payload.tools = [{ google_search: {} }];
-        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`, {
+        const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
         });
-        if (!res.ok) {
-          if (res.status === 429 || res.status === 401 || res.status === 403) break;
+        if (!r.ok) {
+          if (r.status === 429 || r.status === 401 || r.status === 403) break;
           continue;
         }
-        const data = await res.json();
+        const data = await r.json();
         const parts = data?.candidates?.[0]?.content?.parts || [];
         let rawText = parts.filter(p => !p.thought && typeof p.text === 'string').map(p => p.text).join('').trim();
         if (!rawText && parts.length) rawText = parts.map(p => p.text || '').join('').trim();
@@ -120,13 +113,13 @@ exports.handler = async (event) => {
         if (parsed && typeof parsed === 'object') {
           if (grounded) parsed._webGrounded = Boolean(data?.candidates?.[0]?.groundingMetadata);
           parsed._provider = 'gemini';
-          return { statusCode: 200, headers, body: JSON.stringify(parsed) };
+          return res.status(200).json(parsed);
         }
       } catch (e) {}
     }
   }
 
-  // 2. GROQ (Ultra-fast free tier: llama-3.3-70b-versatile / openai/gpt-oss-120b)
+  // 2. GROQ (Ultra-fast free tier)
   if (process.env.GROQ_API_KEY) {
     for (const model of ['llama-3.3-70b-versatile', 'openai/gpt-oss-120b']) {
       try {
@@ -134,12 +127,12 @@ exports.handler = async (event) => {
           'https://api.groq.com/openai/v1/chat/completions',
           process.env.GROQ_API_KEY, model, prompt, temperature
         );
-        if (parsed) { parsed._provider = 'groq'; return { statusCode: 200, headers, body: JSON.stringify(parsed) }; }
+        if (parsed) { parsed._provider = 'groq'; return res.status(200).json(parsed); }
       } catch (e) {}
     }
   }
 
-  // 3. CEREBRAS (High-throughput free tier)
+  // 3. CEREBRAS (Optional)
   if (process.env.CEREBRAS_API_KEY) {
     for (const model of ['gpt-oss-120b', 'llama-3.3-70b']) {
       try {
@@ -147,20 +140,20 @@ exports.handler = async (event) => {
           'https://api.cerebras.ai/v1/chat/completions',
           process.env.CEREBRAS_API_KEY, model, prompt, temperature
         );
-        if (parsed) { parsed._provider = 'cerebras'; return { statusCode: 200, headers, body: JSON.stringify(parsed) }; }
+        if (parsed) { parsed._provider = 'cerebras'; return res.status(200).json(parsed); }
       } catch (e) {}
     }
   }
 
-  // 4. OPENROUTER (Free Models Router: openrouter/free)
+  // 4. OPENROUTER (Free Models Router)
   if (process.env.OPENROUTER_API_KEY) {
     try {
       const parsed = await callOpenAICompatible(
         'https://openrouter.ai/api/v1/chat/completions',
         process.env.OPENROUTER_API_KEY, 'openrouter/free', prompt, temperature,
-        { 'HTTP-Referer': 'https://iplauctionfree.netlify.app', 'X-Title': 'The Gavel House' }
+        { 'HTTP-Referer': 'https://the-gavel-house.vercel.app', 'X-Title': 'The Gavel House' }
       );
-      if (parsed) { parsed._provider = 'openrouter'; return { statusCode: 200, headers, body: JSON.stringify(parsed) }; }
+      if (parsed) { parsed._provider = 'openrouter'; return res.status(200).json(parsed); }
     } catch (e) {}
   }
 
@@ -171,9 +164,9 @@ exports.handler = async (event) => {
         'https://api.mistral.ai/v1/chat/completions',
         process.env.MISTRAL_API_KEY, 'mistral-small-latest', prompt, temperature
       );
-      if (parsed) { parsed._provider = 'mistral'; return { statusCode: 200, headers, body: JSON.stringify(parsed) }; }
+      if (parsed) { parsed._provider = 'mistral'; return res.status(200).json(parsed); }
     } catch (e) {}
   }
 
-  return { statusCode: 502, headers, body: JSON.stringify({ error: 'All configured AI providers busy — using Smart Offline Engine' }) };
+  return res.status(502).json({ error: 'All configured AI providers busy — using Smart Offline Engine' });
 };
