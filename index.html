@@ -12,7 +12,7 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:ital,wght@0,600;0,700;1,700&family=IBM+Plex+Mono:wght@500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=61" />
+<link rel="stylesheet" href="styles.css?v=63" />
 </head>
 <body class="theme-hud">
 <canvas id="confettiCanvas" style="position:fixed;inset:0;pointer-events:none;z-index:85"></canvas>
@@ -34,7 +34,7 @@
       <div class="brand">
         <div class="crest">IPL</div>
         <div class="brand-text">
-          <h1>The Gavel House <span style="font-size:10px;color:#38bdf8;font-style:normal;vertical-align:middle">v61</span></h1>
+          <h1>The Gavel House <span style="font-size:10px;color:#38bdf8;font-style:normal;vertical-align:middle">v63</span></h1>
           <p id="hdrSub">520 Players • ₹120 Cr • ₹25 Cr Cap</p>
         </div>
       </div>
@@ -970,7 +970,10 @@
     </div>
     <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
       <span class="pill pill-live" id="xiEdCount">XI: 0/11 • OS: 0/4 • Impact: None</span>
-      <button class="btn btn-gold btn-sm" onclick="aiPickPlayingXII(editingXITeamId, true)">🧠 Smart Pitch-Balanced XII</button>
+      <div style="display:flex;gap:5px;flex-wrap:wrap">
+        <button class="btn btn-blue btn-sm" onclick="autoSortTempXI()">⚡ Auto-Sort Order</button>
+        <button class="btn btn-gold btn-sm" onclick="aiPickPlayingXII(editingXITeamId, true)">🧠 Smart Pitch-Balanced XII</button>
+      </div>
     </div>
     <div class="pool-list" id="xiEdList" style="max-height:52vh"></div>
     <div class="btn-row" style="margin-top:4px">
@@ -1332,6 +1335,27 @@
   </div>
 </div>
 
+<!-- Next Season GM Retention Picker Modal (5 for Mini-Auction, 3 for Mega Auction) -->
+<div class="backdrop" id="nextSeasonRetainBackdrop" style="z-index:85" onclick="if(event.target===this)closeNextSeasonRetainModal()">
+  <div class="drawer" style="max-width:640px">
+    <div class="drawer-head">
+      <div>
+        <div class="sec-title" id="nsrTitle">🔒 NEXT SEASON RETENTIONS</div>
+        <div style="font-size:11.5px;color:var(--muted)" id="nsrSub">Select your retained stars before the auction begins</div>
+      </div>
+      <button class="icon-btn" onclick="closeNextSeasonRetainModal()">✕</button>
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+      <span class="pill pill-live" id="nsrSummaryPill">Selected: 0/5</span>
+    </div>
+    <div class="pool-list" id="nsrList" style="max-height:52vh"></div>
+    <div class="btn-row" style="margin-top:4px">
+      <button class="btn btn-gold" onclick="confirmGMNextSeasonRetentions()">🔥 Confirm Retentions &amp; Launch Auction</button>
+      <button class="btn" onclick="closeNextSeasonRetainModal()">Cancel</button>
+    </div>
+  </div>
+</div>
+
 <!-- Celebratory SOLD Overlay -->
 <div class="sold-overlay" id="soldOverlay">
   <div class="sold-stamp">
@@ -1395,13 +1419,13 @@
 <div class="toast" id="toast"></div>
 
 
-<script src="players.js?v=61"></script>
-<script src="state.js?v=61"></script>
-<script src="offline-engine.js?v=61"></script>
-<script src="ai-engine.js?v=61"></script>
-<script src="multiplayer.js?v=61"></script>
-<script src="season.js?v=61"></script>
-<script src="international.js?v=61"></script>
-<script src="ui.js?v=61"></script>
+<script src="players.js?v=63"></script>
+<script src="state.js?v=63"></script>
+<script src="offline-engine.js?v=63"></script>
+<script src="ai-engine.js?v=63"></script>
+<script src="multiplayer.js?v=63"></script>
+<script src="season.js?v=63"></script>
+<script src="international.js?v=63"></script>
+<script src="ui.js?v=63"></script>
 </body>
 </html>

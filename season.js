@@ -137,16 +137,37 @@ function computePlayingXII(t, pitchDesc=''){
 
 function openXIEditor(tid){
   const t = state.teams.find(x => x.id === tid);
-  if (!t || t.squad.length < 11) { showToast('Team needs at least 11 signed players to edit Playing XII.'); return; }
+  if (!t) { showToast('Team not found.'); return; }
+  // Deduplicate squad & filter valid players
+  t.squad = [...new Set(t.squad)].filter(id => Boolean(state.players[id]));
+  if (t.squad.length < 11) { showToast('Team needs at least 11 signed players to edit Playing XII.'); return; }
   editingXITeamId = tid;
-  const { xi, impact } = computePlayingXII(t);
-  tempXIIds = xi.map(p => p.id);
-  tempImpactId = impact ? impact.id : null;
+  const { xi, impact } = computePlayingXII(t, pendingPreMatch?.pitch || t.home);
+  tempXIIds = xi.map(p => p.id).filter(id => t.squad.includes(id));
+  if (tempXIIds.length < 11) {
+    let os = tempXIIds.filter(id => state.players[id]?.os).length;
+    for (const id of t.squad) {
+      if (tempXIIds.length >= 11) break;
+      const p = state.players[id];
+      if (!p || tempXIIds.includes(id) || (p.os && os >= 4)) continue;
+      tempXIIds.push(id);
+      if (p.os) os++;
+    }
+  }
+  tempImpactId = (impact && t.squad.includes(impact.id) && !tempXIIds.includes(impact.id)) ? impact.id : null;
   document.getElementById('xiEdTitle').textContent = `✏️ ${t.id} PLAYING XII & BATTING ORDER`;
   document.getElementById('xiEdSub').textContent = `${t.home} • ▲ ▼ to reorder (4 OS in XI = Indian Impact Only)`;
   renderXIEditorList();
   const xiEl = document.getElementById('xiEditorBackdrop');
   if (xiEl) { xiEl.style.zIndex = '99'; xiEl.classList.add('open'); }
+}
+
+function autoSortTempXI(){
+  if (!tempXIIds || !tempXIIds.length) return;
+  tempXIIds = autoSortBattingOrder(tempXIIds);
+  sfxPaddle();
+  showToast('⚡ Auto-sorted Playing XI into natural IPL batting order (#1–#11)!');
+  renderXIEditorList();
 }
 
 function moveXIPlayer(pid, delta){
@@ -976,6 +997,7 @@ async function runOneSeasonMatch(useGeminiLine=true, tossInfo=null){
       const remAfterSix = Math.max(0, r - sixes * 6);
       const fours = remAfterSix >= 8 ? Math.min(Math.floor(remAfterSix / 8), Math.floor(Math.random() * (Math.floor(remAfterSix/7) + 2))) : 0;
       const out = i < wktsLost;
+      if (!s.pStats[p.id]) s.pStats[p.id] = { runs:0, wkts:0, catches:0, impact:0 };
       s.pStats[p.id].runs += r;
       s.pStats[p.id].impact += r * 1.1;
       return { name:p.name, r, b, f4:fours, s6:sixes, sr:((r/Math.max(1,b))*100).toFixed(1), out };
@@ -1009,9 +1031,14 @@ async function runOneSeasonMatch(useGeminiLine=true, tossInfo=null){
       const eligible = activeBowlers.filter(x => x.w < 4);
       const pool = eligible.length ? eligible : activeBowlers;
       const b = pool[Math.floor(Math.random() * pool.length)];
-      if (b) { b.w += 1; s.pStats[b.id].wkts += 1; s.pStats[b.id].impact += 25; }
+      if (b) {
+        b.w += 1;
+        if (!s.pStats[b.id]) s.pStats[b.id] = { runs:0, wkts:0, catches:0, impact:0 };
+        s.pStats[b.id].wkts += 1; s.pStats[b.id].impact += 25;
+      }
       const f = bowlXI[Math.floor(Math.random() * bowlXI.length)];
       if (f && Math.random() < 0.45) {
+        if (!s.pStats[f.id]) s.pStats[f.id] = { runs:0, wkts:0, catches:0, impact:0 };
         s.pStats[f.id].catches += 1; s.pStats[f.id].impact += 8;
         const sc = Math.random() * 100 + (f.ovr * 0.2);
         if (sc > s.bestCatch.score) {
@@ -1114,20 +1141,36 @@ Return ONLY valid JSON: {"line": "..."}`;
 function finalizeSeasonAwards(){
   const s = state.seasonData;
   const allPlayed = state.players.filter(p => p.status === 'SOLD');
-  const orange = [...allPlayed].sort((a,b) => s.pStats[b.id].runs - s.pStats[a.id].runs)[0];
-  const purple = [...allPlayed].sort((a,b) => s.pStats[b.id].wkts - s.pStats[a.id].wkts)[0];
-  const allRounders = allPlayed.filter(p => p.role === 'AR' && s.pStats[p.id].runs >= 100 && s.pStats[p.id].wkts >= 5);
+  if (!allPlayed.length) return;
+  const stOf = (id) => s.pStats[id] || { runs:0, wkts:0, catches:0, impact:0 };
+  const orange = [...allPlayed].sort((a,b) => stOf(b.id).runs - stOf(a.id).runs)[0];
+  const purple = [...allPlayed].sort((a,b) => stOf(b.id).wkts - stOf(a.id).wkts)[0];
+  const allRounders = allPlayed.filter(p => p.role === 'AR' && stOf(p.id).runs >= 100 && stOf(p.id).wkts >= 5);
   const brown = [...(allRounders.length ? allRounders : allPlayed.filter(p=>p.role==='AR'))].sort((a,b) =>
-    (s.pStats[b.id].runs + s.pStats[b.id].wkts * 26) - (s.pStats[a.id].runs + s.pStats[a.id].wkts * 26)
+    (stOf(b.id).runs + stOf(b.id).wkts * 26) - (stOf(a.id).runs + stOf(a.id).wkts * 26)
   )[0] || orange;
-  const mvp = [...allPlayed].sort((a,b) => s.pStats[b.id].impact - s.pStats[a.id].impact)[0];
+  const mvp = [...allPlayed].sort((a,b) => stOf(b.id).impact - stOf(a.id).impact)[0];
 
   s.awards = {
-    orange: { name:orange.name, team:orange.soldTo, stat:`${s.pStats[orange.id].runs} Runs` },
-    purple: { name:purple.name, team:purple.soldTo, stat:`${s.pStats[purple.id].wkts} Wickets` },
-    brown:  { name:brown.name, team:brown.soldTo, stat:`${s.pStats[brown.id].runs} Runs & ${s.pStats[brown.id].wkts} Wkts` },
-    mvp:    { name:mvp.name, team:mvp.soldTo, stat:`${Math.round(s.pStats[mvp.id].impact)} MVP Pts (${s.pStats[mvp.id].runs}R, ${s.pStats[mvp.id].wkts}W)` }
+    orange: { name:orange.name, team:orange.soldTo, stat:`${stOf(orange.id).runs} Runs` },
+    purple: { name:purple.name, team:purple.soldTo, stat:`${stOf(purple.id).wkts} Wickets` },
+    brown:  { name:brown.name, team:brown.soldTo, stat:`${stOf(brown.id).runs} Runs & ${stOf(brown.id).wkts} Wkts` },
+    mvp:    { name:mvp.name, team:mvp.soldTo, stat:`${Math.round(stOf(mvp.id).impact)} MVP Pts (${stOf(mvp.id).runs}R, ${stOf(mvp.id).wkts}W)` }
   };
+
+  // Archive into Hall of Fame (Multi-Season Dynasty History)
+  if (!Array.isArray(state.hallOfFame)) state.hallOfFame = [];
+  const sNum = state.seasonNumber || 1;
+  if (!state.hallOfFame.some(h => h.season === sNum)) {
+    state.hallOfFame.unshift({
+      season: sNum,
+      champ: s.champId,
+      runner: s.runnerId,
+      orange: `${orange.name} (${stOf(orange.id).runs}R)`,
+      purple: `${purple.name} (${stOf(purple.id).wkts}W)`,
+      mvp: `${mvp.name} (${mvp.soldTo})`
+    });
+  }
   sfxGavel();
   fireConfetti(s.table[s.champId]?.color || '#00e5ff');
   setTimeout(()=>sfxCrowdRoar(1.8), 150);
@@ -1608,7 +1651,7 @@ function renderSeason(){
           </div>
           <div class="btn-row" style="margin-top:10px">
             <button class="btn btn-gold btn-sm" onclick="downloadSeasonPosterPNG()">🖼️ Download Champion &amp; Best XI Poster (PNG)</button>
-            <button class="btn btn-purple btn-sm" onclick="startNextSeasonMiniAuction()">🔄 Launch Season ${(state.seasonNumber||1)+1} Mini-Auction</button>
+            <button class="btn btn-purple btn-sm" onclick="startNextSeasonMiniAuction()">🔥 Launch Season ${(state.seasonNumber||1)+1} ${(((state.seasonNumber||1)) % 3 === 0) ? 'MEGA Auction (3 Retentions)' : 'Mini-Auction (5 Retentions)'}</button>
           </div>
         </div>`;
     } else champWrap.innerHTML = '';
@@ -1644,7 +1687,18 @@ function renderSeason(){
             ${topSteals.map((p,i)=>`<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0;border-bottom:1px solid var(--card-border)"><span>${i+1}. ${p.name} <small style="color:var(--muted)">(${fmtCr(p.soldPrice)})</small></span><b>${Math.round(s.pStats[p.id]?.impact||0)} pts</b></div>`).join('')}
           </div>
         </div>
-      </div>`;
+      </div>` + (Array.isArray(state.hallOfFame) && state.hallOfFame.length ? `
+      <div class="panel" style="border-color:var(--gold)">
+        <div class="sec-title" style="margin-bottom:8px">🏛️ MULTI-SEASON HALL OF FAME</div>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>Season</th><th>Champion</th><th>Runner-Up</th><th>🧡 Orange Cap</th><th>💜 Purple Cap</th><th>👑 MVP</th></tr></thead>
+            <tbody>
+              ${state.hallOfFame.map(h => `<tr><td><b>S${h.season}</b></td><td><b style="color:var(--gold)">🏆 ${h.champ}</b></td><td>${h.runner}</td><td>${h.orange}</td><td>${h.purple}</td><td>${h.mvp}</td></tr>`).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>` : '');
   }
 }
 
@@ -2505,7 +2559,19 @@ function lmSkipToEnd(){
 function lmToggleScorecard(){
   if (!lmState) return;
   lmState.showCard = !lmState.showCard;
-  document.getElementById('lmLiveCardWrap').style.display = lmState.showCard ? 'block' : 'none';
+  const wrap = document.getElementById('lmLiveCardWrap');
+  const btn = document.getElementById('btnLmCardToggle');
+  if (wrap) wrap.style.display = lmState.showCard ? 'block' : 'none';
+  if (btn) btn.textContent = lmState.showCard ? '📋 Hide Scorecard' : '📋 Live Scorecard';
+  renderLiveMatchUI();
+  if (lmState.showCard && wrap) {
+    wrap.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+}
+
+function lmSetCardTab(innNum){
+  if (!lmState) return;
+  lmState.cardTab = innNum;
   renderLiveMatchUI();
 }
 
@@ -2584,8 +2650,12 @@ function renderLiveMatchUI(){
   document.getElementById('lmRunRate').textContent = `CRR: ${crr}`;
 
   if (st.finished) {
-    const m = state.seasonData.matches[state.seasonData.matches.length - 1];
-    document.getElementById('lmTargetEq').textContent = `🏆 ${m.winner} won by ${m.margin}`;
+    const lastRes = st.isIntl
+      ? (state.intlCareer?.results || []).slice(-1)[0]
+      : (state.seasonData?.matches || []).slice(-1)[0];
+    document.getElementById('lmTargetEq').textContent = lastRes
+      ? `🏆 ${lastRes.winner} won by ${lastRes.margin}`
+      : '🏆 Match Completed';
     document.getElementById('btnLmBall').disabled = true;
     document.getElementById('btnLmOver').disabled = true;
     document.getElementById('btnLmAuto').disabled = true;
@@ -2684,19 +2754,32 @@ function renderLiveMatchUI(){
     impBtn.textContent = used ? '⚡ Sub Used' : `⚡ Impact Sub`;
   }
 
-  // Live Mini Scorecard if toggled open
+  // Full 2-Innings Live Scorecard if toggled open
   if (st.showCard) {
-    const batted = inn.batCard.filter(b => b.batted);
-    const bowled = inn.bowlCard.filter(b => b.ov > 0 || b.balls > 0);
+    const activeTab = (st.cardTab === 1 || !st.inn2) ? 1 : (st.cardTab === 2 ? 2 : st.innNum);
+    const viewInn = activeTab === 1 ? st.inn1 : st.inn2;
+    const batted = viewInn.batCard.filter(b => b.batted);
+    const dnb = viewInn.batCard.filter(b => !b.batted).map(b => b.name);
+    const bowled = viewInn.bowlCard.filter(b => b.ov > 0 || b.balls > 0);
+    const tabBtns = `
+      <div style="display:flex;gap:6px;margin-bottom:6px">
+        <button class="chip ${activeTab===1?'active':''}" onclick="lmSetCardTab(1)">1st Inn: ${st.inn1.batTeamId} (${st.inn1.runs}/${st.inn1.wkts})</button>
+        ${st.inn2 ? `<button class="chip ${activeTab===2?'active':''}" onclick="lmSetCardTab(2)">2nd Inn: ${st.inn2.batTeamId} (${st.inn2.runs}/${st.inn2.wkts})</button>` : ''}
+      </div>`;
     document.getElementById('lmLiveCardWrap').innerHTML = `
-      <div class="tbl-wrap" style="background:var(--input-bg);border:1px solid var(--card-border);border-radius:5px;padding:6px">
+      <div class="tbl-wrap" style="background:var(--input-bg);border:1.5px solid var(--gold);border-radius:6px;padding:8px">
+        ${tabBtns}
         <table>
-          <thead><tr><th>Batter</th><th>Status</th><th>R</th><th>B</th><th>4s</th><th>6s</th></tr></thead>
-          <tbody>${batted.map(b=>`<tr><td><b>${b.name}</b></td><td style="font-size:10px;color:var(--muted)">${b.out?b.howOut:'not out*'}</td><td><b>${b.r}</b></td><td>${b.b}</td><td>${b.f4}</td><td>${b.s6}</td></tr>`).join('')}</tbody>
+          <thead><tr><th>Batter</th><th>Status</th><th>R</th><th>B</th><th>4s</th><th>6s</th><th>SR</th></tr></thead>
+          <tbody>${batted.map(b=>`<tr><td><b>${b.name}</b></td><td style="font-size:10px;color:var(--muted)">${b.out?b.howOut:'not out*'}</td><td><b>${b.r}</b></td><td>${b.b}</td><td>${b.f4}</td><td>${b.s6}</td><td>${((b.r/Math.max(1,b.b))*100).toFixed(1)}</td></tr>`).join('')}</tbody>
         </table>
+        <div style="font-size:10.5px;color:var(--muted);margin:5px 0;font-family:'IBM Plex Mono',monospace">
+          <b>Total:</b> ${viewInn.runs}/${viewInn.wkts} (${lmFormatOvers(viewInn.legalBalls)} ov) • <b>Extras:</b> ${viewInn.extras || 0}
+          ${dnb.length ? `<br/><b>Yet to Bat:</b> ${dnb.join(', ')}` : ''}
+        </div>
         <table style="margin-top:6px">
           <thead><tr><th>Bowler</th><th>O</th><th>R</th><th>W</th><th>Econ</th></tr></thead>
-          <tbody>${bowled.map(b=>`<tr><td><b>${b.name}</b></td><td>${b.ov}.${b.balls}</td><td>${b.r}</td><td><b>${b.w}</b></td><td>${(b.r/Math.max(0.16,b.ov+b.balls/6)).toFixed(2)}</td></tr>`).join('')}</tbody>
+          <tbody>${bowled.length ? bowled.map(b=>`<tr><td><b>${b.name}</b></td><td>${b.ov}.${b.balls}</td><td>${b.r}</td><td><b>${b.w}</b></td><td>${(b.r/Math.max(0.16,b.ov+b.balls/6)).toFixed(2)}</td></tr>`).join('') : '<tr><td colspan="5" style="color:var(--muted)">No balls bowled yet</td></tr>'}</tbody>
         </table>
       </div>`;
   }
@@ -2818,11 +2901,120 @@ function getCaptainTrait(p){
   return { key:'PP', badge:'🔥 Powerplay Aggressor', desc:'+5 powerplay batting intent & field aggression' };
 }
 
+let tempGMRetainIds = [];
+let tempNextSeasonCfg = null;
+
 function startNextSeasonMiniAuction(){
   const s = state.seasonData;
-  if (!s || !s.finished) { showToast('Finish the current season first to launch the Mini-Auction!'); return; }
+  if (!s || !s.finished) { showToast('Finish the current season first to launch the next auction!'); return; }
   const nextSeason = (state.seasonNumber || 1) + 1;
-  if (!confirm(`Launch Season ${nextSeason} Mini-Auction? Every franchise will retain its top 5 core stars, release the rest to the auction pool, and update player OVRs based on Season ${nextSeason - 1} stats!`)) return;
+  // Every 3 seasons (S4, S7, S10...) is a MEGA AUCTION (max 3 retentions); S2, S3, S5, S6... are MINI-AUCTIONS (max 5 retentions)
+  const isMega = ((nextSeason - 1) % 3 === 0);
+  const maxRetain = isMega ? 3 : 5;
+  const auctionType = isMega ? 'MEGA AUCTION' : 'MINI-AUCTION';
+  tempNextSeasonCfg = { nextSeason, isMega, maxRetain, auctionType };
+
+  // If playing as a Franchise GM, open the interactive Retention Picker so the user picks their 5 (Mini) or 3 (Mega) players!
+  if (state.humanTeamId) {
+    const myT = state.teams.find(x => x.id === state.humanTeamId);
+    if (myT && myT.squad.length) {
+      const ranked = myT.squad
+        .map(id => state.players[id])
+        .filter(Boolean)
+        .sort((a, b) => ((s.pStats[b.id]?.impact || 0) * 0.2 + b.ovr * 5) - ((s.pStats[a.id]?.impact || 0) * 0.2 + a.ovr * 5));
+      tempGMRetainIds = [];
+      let os = 0;
+      for (const p of ranked) {
+        if (tempGMRetainIds.length >= maxRetain) break;
+        if (p.os && os >= 2) continue;
+        tempGMRetainIds.push(p.id);
+        if (p.os) os++;
+      }
+      renderNextSeasonRetentionModal();
+      document.getElementById('nextSeasonRetainBackdrop')?.classList.add('open');
+      return;
+    }
+  }
+
+  if (!confirm(`Launch Season ${nextSeason} ${auctionType}? Every franchise will retain up to ${maxRetain} core stars, release the rest to the auction pool, and update player OVRs based on Season ${nextSeason - 1} stats!`)) return;
+  executeNextSeasonTransition(null);
+}
+
+function closeNextSeasonRetainModal(){
+  document.getElementById('nextSeasonRetainBackdrop')?.classList.remove('open');
+}
+
+function toggleGMRetentionPick(pid){
+  if (!tempNextSeasonCfg) return;
+  const { maxRetain } = tempNextSeasonCfg;
+  const idx = tempGMRetainIds.indexOf(pid);
+  if (idx !== -1) {
+    tempGMRetainIds.splice(idx, 1);
+  } else {
+    if (tempGMRetainIds.length >= maxRetain) {
+      showToast(`Max ${maxRetain} retentions allowed for this ${tempNextSeasonCfg.auctionType}! Deselect a player first.`);
+      return;
+    }
+    const p = state.players[pid];
+    const osNow = tempGMRetainIds.filter(id => state.players[id]?.os).length;
+    if (p && p.os && osNow >= 2) {
+      showToast('Max 2 Overseas retentions allowed!');
+      return;
+    }
+    tempGMRetainIds.push(pid);
+  }
+  beep(620, 0.05, 'triangle', 0.08);
+  renderNextSeasonRetentionModal();
+}
+
+function renderNextSeasonRetentionModal(){
+  if (!tempNextSeasonCfg || !state.humanTeamId) return;
+  const { nextSeason, isMega, maxRetain, auctionType } = tempNextSeasonCfg;
+  const myT = state.teams.find(x => x.id === state.humanTeamId);
+  if (!myT) return;
+  const s = state.seasonData;
+  const retSlabs = isMega ? [1800, 1400, 1100] : [1800, 1400, 1100, 800, 500];
+  const fullPurse = state.startingPurse || 12000;
+  const spent = tempGMRetainIds.reduce((sum, _, i) => sum + (retSlabs[i] || 500), 0);
+  const remPurse = Math.max(2000, fullPurse - spent);
+  const osCount = tempGMRetainIds.filter(id => state.players[id]?.os).length;
+
+  document.getElementById('nsrTitle').textContent = `🔒 SEASON ${nextSeason} ${auctionType} — ${myT.id} RETENTIONS`;
+  document.getElementById('nsrSub').textContent = isMega
+    ? `Every 3rd season is a MEGA AUCTION! Select up to 3 core stars (Max 2 OS).`
+    : `Mini-Auction before Season ${nextSeason}! Select up to 5 core stars (Max 2 OS).`;
+  document.getElementById('nsrSummaryPill').textContent = `Selected: ${tempGMRetainIds.length}/${maxRetain} • OS: ${osCount}/2 • Purse Left: ${fmtCr(remPurse)}`;
+
+  const list = myT.squad
+    .map(id => state.players[id])
+    .filter(Boolean)
+    .sort((a, b) => b.ovr - a.ovr);
+
+  document.getElementById('nsrList').innerHTML = list.map(p => {
+    const selIdx = tempGMRetainIds.indexOf(p.id);
+    const isSel = selIdx !== -1;
+    const cost = isSel ? (retSlabs[selIdx] || 500) : 0;
+    const st = (s && s.pStats && s.pStats[p.id]) ? s.pStats[p.id] : { runs:0, wkts:0 };
+    return `
+      <div class="pool-row" onclick="toggleGMRetentionPick(${p.id})" style="cursor:pointer;${isSel?'border-color:#10b981;background:rgba(16,185,129,0.14)':''}">
+        <div class="p-info">
+          <div class="p-name">${isSel?'✅ ':'⬜ '}${p.name} ${p.os?'✈️':'🇮🇳'} <span style="font-size:10px;color:var(--gold)">OVR ${p.ovr}</span></div>
+          <div class="p-sub">${roleLabel(p.role)} • Last Season: ${st.runs}R, ${st.wkts}W</div>
+        </div>
+        <span class="pill ${isSel?'pill-live':''}">${isSel ? `KEEP (${fmtCr(cost)})` : 'RELEASE'}</span>
+      </div>`;
+  }).join('');
+}
+
+function confirmGMNextSeasonRetentions(){
+  closeNextSeasonRetainModal();
+  executeNextSeasonTransition([...tempGMRetainIds]);
+}
+
+function executeNextSeasonTransition(gmSelectedIds){
+  const s = state.seasonData;
+  if (!s || !tempNextSeasonCfg) return;
+  const { nextSeason, isMega, maxRetain, auctionType } = tempNextSeasonCfg;
 
   // 1. Dynamic OVR progression based on last season stats
   state.players.forEach(p => {
@@ -2835,23 +3027,27 @@ function startNextSeasonMiniAuction(){
     if (p.status === 'INJURED') { p.injured = false; p.status = 'AVAIL'; }
   });
 
-  // 2. Retain top 5 core stars per franchise (slabs: 18Cr, 14Cr, 11Cr, 8Cr, 5Cr = 56Cr; Purse left = 64Cr)
-  const retSlabs = [1800, 1400, 1100, 800, 500];
+  // 2. Retain stars per franchise (Mega = 3 stars [18/14/11 Cr], Mini = 5 stars [18/14/11/8/5 Cr])
+  const retSlabs = isMega ? [1800, 1400, 1100] : [1800, 1400, 1100, 800, 500];
   const fullPurse = state.startingPurse || 12000;
   const retainedSet = new Set();
 
   state.teams.forEach(t => {
-    const ranked = t.squad
-      .map(id => state.players[id])
-      .filter(Boolean)
-      .sort((a, b) => ((s.pStats[b.id]?.impact || 0) * 0.2 + b.ovr * 5) - ((s.pStats[a.id]?.impact || 0) * 0.2 + a.ovr * 5));
-    const keep = [];
-    let osKept = 0;
-    for (const p of ranked) {
-      if (keep.length >= 5) break;
-      if (p.os && osKept >= 2) continue;
-      keep.push(p);
-      if (p.os) osKept++;
+    let keep = [];
+    if (Array.isArray(gmSelectedIds) && state.humanTeamId === t.id) {
+      keep = gmSelectedIds.slice(0, maxRetain).map(id => state.players[id]).filter(Boolean);
+    } else {
+      const ranked = t.squad
+        .map(id => state.players[id])
+        .filter(Boolean)
+        .sort((a, b) => ((s.pStats[b.id]?.impact || 0) * 0.2 + b.ovr * 5) - ((s.pStats[a.id]?.impact || 0) * 0.2 + a.ovr * 5));
+      let osKept = 0;
+      for (const p of ranked) {
+        if (keep.length >= maxRetain) break;
+        if (p.os && osKept >= 2) continue;
+        keep.push(p);
+        if (p.os) osKept++;
+      }
     }
     let spent = 0;
     t.squad = [];
@@ -2864,30 +3060,40 @@ function startNextSeasonMiniAuction(){
     });
     t.purse = Math.max(2000, fullPurse - spent);
     t.customXI = null; t.customImpact = null;
-    t.rtmCards = 2;
-    t.chatter = `🔒 Retained ${keep.length} stars for Season ${nextSeason} Mini-Auction!`;
+    t.captainId = keep[0]?.id ?? null;
+    t.vcId = keep[1]?.id ?? null;
+    t.xiNote = '';
+    t.rtmCards = isMega ? 3 : 2;
+    t.chatter = `🔒 Retained ${keep.length}/${maxRetain} stars for Season ${nextSeason} ${auctionType}!`;
   });
 
   // 3. Release all non-retained players back to AVAIL pool
   state.players.forEach(p => {
     if (!retainedSet.has(p.id)) {
-      p.status = 'AVAIL'; p.soldTo = null; p.soldPrice = 0; p.retained = false;
+      p.status = 'AVAIL'; p.soldTo = null; p.soldPrice = 0; p.retained = false; p.injured = false;
     }
   });
 
+  aiPickingInProgress = {};
+  pendingPreMatch = null;
+  lmState = null;
+  editingXITeamId = null;
   state.seasonNumber = nextSeason;
   state.seasonData = null;
   state.curId = null; state.curLeader = null; state.curBid = 0; state.gavelStage = 0;
   state.retentionsDone = true;
   state.tradesUnlocked = true;
+  state.tradeProposals = [];
+  state.injuryRequests = [];
+  state.lotCommitments = {};
   state.midSeasonLoanDone = false;
   state.playerForm = {};
   state.injuryHistory = [];
   state.soldOrder = [];
 
   sfxTrade();
-  pushTicker(`🔥 SEASON ${nextSeason} MINI-AUCTION LIVE! TOP 5 STARS RETAINED PER TEAM — PURSES RESET!`);
-  showToast(`🔥 Season ${nextSeason} Mini-Auction Ready! Head to STAGE to start bidding!`);
+  pushTicker(`🔥 SEASON ${nextSeason} ${auctionType} LIVE! UP TO ${maxRetain} STARS RETAINED PER TEAM — PURSES RESET!`);
+  showToast(`🔥 Season ${nextSeason} ${auctionType} Ready! Head to STAGE to start bidding!`);
   switchView('stage');
   renderAll(); saveState();
 }
